@@ -6,6 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "muli-sorter-preview"
 version = "0.16.2"
 description = "Independent read-only completion service, order candidates, and synthetic archive validation"
+license = { text = "Apache-2.0" }
 requires-python = ">=3.12"
 dependencies = ["blake3==1.0.9"]
 

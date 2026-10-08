@@ -2,7 +2,7 @@
 
 ## 2026-10-09 源码纳入 GitHub 管理（已推送）
 
-两个仓库对齐到线上实际运行的包（逐文件 sha256 比对）：归档控制台/分类服务/独立校验 → https://github.com/muqeing/muli-archive（私有）；拷贝与备份 → https://github.com/muqeing/muli-ingest（公开，此前停在 2026-09-29，本次补齐十天改动）。本目录是 muli-archive 的 git 工作副本；拷贝侧通过 tools/publish-ingest.sh 从 work/ingest-source-release 发布。约定：每次上线前跑通测试，回读通过后立即推送。发布入口与仓库对应关系见 tools/README.md。
+两个仓库对齐到线上实际运行的包（逐文件 sha256 比对）：归档控制台/分类服务/独立校验 → https://github.com/muqeing/muli-archive（公开）；拷贝与备份 → https://github.com/muqeing/muli-ingest（公开，此前停在 2026-09-29，本次补齐十天改动）。本目录是 muli-archive 的 git 工作副本；拷贝侧通过 tools/publish-ingest.sh 从 work/ingest-source-release 发布。约定：每次上线前跑通测试，回读通过后立即推送。发布入口与仓库对应关系见 tools/README.md。
 
 历史补充回读：2026-10-05T13:56:45.918773+00:00，438.995秒有限观察结束后归档服务又发生重启，最终稳定性未通过。此前通过记录保留为阶段历史，不代表当前全部正常。正在只读查准确退出原因；未再次归档或重放续验。
 

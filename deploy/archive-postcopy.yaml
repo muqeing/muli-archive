@@ -1,0 +1,6 @@
+services:
+  archive-console:
+    image: muli-sorter:0.16.0
+    environment:
+      MULI_POSTCOPY_RECEIPTS: /queue/postcopy-verifications
+      MULI_DISCARDED_INDEX: /archive-state/discarded-index

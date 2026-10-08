@@ -1,0 +1,70 @@
+# Explicitly requested studio-LAN entry; keep the archive worker isolated.
+services:
+  archive-console:
+    image: muli-sorter:0.13.0
+    ports: !reset []
+    command:
+      - --queue
+      - /queue
+      - --staging
+      - /staging
+      - --projects
+      - /projects
+      - --state
+      - /archive-state
+      - --state-db
+      - /ingest-state/ingest.sqlite3
+      - --project-label
+      - 木梨家庭摄影工作室/摄影工作室/拍摄项目
+      - --host
+      - 0.0.0.0
+      - --port
+      - "18767"
+      - --public-origin
+      - http://192.168.31.244:18767
+      - --allow-lan-origin
+      - --enable-project-writes
+    networks:
+      operator-only:
+        ipv4_address: 10.249.0.2
+  archive-lan:
+    image: nginx@sha256:97d490c12ba55b4946b01546d1c3ed324e8d41ab1c9fcb2a616aa470620e5b46
+    pull_policy: never
+    user: "1000:1001"
+    entrypoint: ["nginx"]
+    command: ["-g", "daemon off;"]
+    depends_on:
+      archive-console:
+        condition: service_healthy
+    ports:
+      - "192.168.31.244:18767:8080"
+    volumes:
+      - type: bind
+        source: ./archive-lan-nginx.conf
+        target: /etc/nginx/nginx.conf
+        read_only: true
+        bind: {create_host_path: false}
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+    cpus: "0.25"
+    mem_limit: 128m
+    pids_limit: 64
+    tmpfs:
+      - /tmp:size=32m,uid=1000,gid=1001
+    networks:
+      operator-only:
+        ipv4_address: 10.249.0.3
+      lan-entry:
+        ipv4_address: 10.249.0.10
+networks:
+  operator-only:
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.249.0.0/29
+  lan-entry:
+    ipam:
+      config:
+        - subnet: 10.249.0.8/29

@@ -1,0 +1,5 @@
+# Preserve existing classifier configuration; update only its read-only worker.
+# Use with the active 0.7.1 deploy/compose.yaml on NAS, --no-deps muli-sorter.
+services:
+  muli-sorter:
+    image: muli-sorter:0.13.0

@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "muli-sorter-preview"
+version = "0.16.2"
+description = "Independent read-only completion service, order candidates, and synthetic archive validation"
+requires-python = ">=3.12"
+dependencies = ["blake3==1.0.9"]
+
+[project.optional-dependencies]
+photos = ["rawpy==0.27.1", "Pillow==12.3.0", "numpy==2.5.3"]
+
+[project.scripts]
+muli-sorter = "muli_sorter.cli:main"
+muli-sorter-check-plan = "muli_sorter.check_plan:main"
+muli-sorter-archive-demo = "muli_sorter.archive_demo:main"
+muli-sorter-queue = "muli_sorter.queue_cli:main"
+muli-sorter-service = "muli_sorter.queue_service:main"
+muli-sorter-order-preview = "muli_sorter.order_preview:main"
+muli-sorter-order-feed = "muli_sorter.order_feed:main"
+muli-sorter-video-previews = "muli_sorter.video_previews:main"
+muli-sorter-manual-folders = "muli_sorter.manual_folders:main"
+muli-sorter-archive-console = "muli_sorter.archive_console:main"
+muli-sorter-postcopy = "muli_sorter.postcopy_service:main"
+
+[tool.setuptools.package-data]
+muli_sorter = ["*.js", "demo_assets/*.jpg", "demo_assets/*.mp4"]
+
+[tool.setuptools.packages.find]
+where = ["src"]

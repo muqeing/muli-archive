@@ -1,0 +1,32 @@
+# Requires explicit approval: enables per-submission verified source removal.
+# Use with archive-console.yaml AND archive-lan.yaml. Never apply by itself.
+services:
+  archive-console:
+    command:
+      - --queue
+      - /queue
+      - --staging
+      - /staging
+      - --projects
+      - /projects
+      - --state
+      - /archive-state
+      - --state-db
+      - /ingest-state/ingest.sqlite3
+      - --project-label
+      - 木梨家庭摄影工作室/摄影工作室/拍摄项目
+      - --host
+      - 0.0.0.0
+      - --port
+      - "18767"
+      - --public-origin
+      - http://192.168.31.244:18767
+      - --allow-lan-origin
+      - --enable-project-writes
+      - --enable-source-removal
+    volumes:
+      - type: bind
+        source: /vol1/1000/木梨家庭摄影工作室/摄影工作室/拍摄项目/素材中转
+        target: /staging
+        read_only: false
+        bind: {create_host_path: false}

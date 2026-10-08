@@ -1,0 +1,110 @@
+services:
+  muli-sorter:
+    image: muli-sorter:0.8.0
+    platform: linux/amd64
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    user: "1000:1001"
+    environment:
+      MULI_SORTER_PROJECTS_LABEL: "木梨家庭摄影工作室/摄影工作室/拍摄项目"
+    command:
+      - --staging
+      - /staging
+      - --projects
+      - /projects
+      - --state-db
+      - /ingest-state/ingest.sqlite3
+      - --output
+      - /sorter-state
+      - --interval
+      - "2"
+    restart: unless-stopped
+    read_only: true
+    network_mode: none
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    cpus: "0.5"
+    mem_limit: 512m
+    pids_limit: 128
+    tmpfs:
+      - /tmp:size=64m
+    volumes:
+      - type: bind
+        source: /vol2/1000/Docker/muli-ingest/state
+        target: /ingest-state
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /vol1/1000/木梨家庭摄影工作室/摄影工作室/拍摄项目/素材中转
+        target: /staging
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /vol1/1000/木梨家庭摄影工作室/摄影工作室/拍摄项目
+        target: /projects
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /vol1/1000/木梨家庭摄影工作室/摄影工作室/服务器/素材分类服务
+        target: /sorter-state
+        read_only: false
+        bind:
+          create_host_path: false
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import json,time;
+          d=json.load(open('/sorter-state/service-health.json',encoding='utf-8'));
+          assert {'last_discovery_epoch','observer_stopped','source_ok','worker_running'} <= d.keys();
+          assert time.time()-float(d['last_discovery_epoch']) <= 60;
+          assert d['observer_stopped'] is False;
+          assert d['worker_running'] is True
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  muli-sorter-previews:
+    image: muli-sorter:0.8.0
+    platform: linux/amd64
+    user: "1000:1001"
+    entrypoint: ["python", "-m", "muli_sorter.video_previews"]
+    command: ["--queue", "/sorter-state", "--staging", "/staging", "--output", "/previews"]
+    restart: unless-stopped
+    read_only: true
+    network_mode: none
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    cpus: "0.5"
+    mem_limit: 512m
+    pids_limit: 64
+    tmpfs:
+      - /tmp:size=32m
+    volumes:
+      - type: bind
+        source: /vol1/1000/木梨家庭摄影工作室/摄影工作室/拍摄项目/素材中转
+        target: /staging
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /vol1/1000/木梨家庭摄影工作室/摄影工作室/服务器/素材分类服务
+        target: /sorter-state
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /vol1/1000/木梨家庭摄影工作室/摄影工作室/服务器/素材分类服务/video-previews
+        target: /previews
+        read_only: false
+        bind:
+          create_host_path: false

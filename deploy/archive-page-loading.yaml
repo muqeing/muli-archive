@@ -1,0 +1,4 @@
+# 0.15.4 candidate: only the operator console image changes.
+services:
+  archive-console:
+    image: muli-sorter:0.15.4

@@ -1,0 +1,39 @@
+services:
+  muli-sorter:
+    image: muli-sorter:0.16.0
+    environment:
+      MULI_POSTCOPY_RECEIPTS: /sorter-state/postcopy-verifications
+
+  muli-postcopy:
+    image: muli-sorter:0.16.0
+    platform: linux/amd64
+    user: "1000:1001"
+    entrypoint: ["python", "-m", "muli_sorter.postcopy_service"]
+    environment:
+      MULI_POSTCOPY_RECEIPTS: /postcopy
+    command: ["--staging", "/staging", "--state-db", "/ingest-state/ingest.sqlite3", "--output", "/postcopy"]
+    restart: unless-stopped
+    read_only: true
+    network_mode: none
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    cpus: "0.5"
+    mem_limit: 256m
+    pids_limit: 32
+    tmpfs: ["/tmp:size=16m"]
+    volumes:
+      - type: bind
+        source: /vol2/1000/Docker/muli-ingest/state
+        target: /ingest-state
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: /vol1/1000/木梨家庭摄影工作室/摄影工作室/拍摄项目/素材中转
+        target: /staging
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: /vol1/1000/木梨家庭摄影工作室/摄影工作室/服务器/素材分类服务/postcopy-verifications
+        target: /postcopy
+        read_only: false
+        bind: {create_host_path: false}

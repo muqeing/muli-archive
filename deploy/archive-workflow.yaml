@@ -1,0 +1,5 @@
+# Local candidate; requires explicit deployment approval. Preserve existing configuration chain.
+services:
+  archive-console:
+    image: muli-sorter:0.16.2
+    command: ["--queue", "/queue", "--staging", "/staging", "--projects", "/projects", "--state", "/archive-state", "--state-db", "/ingest-state/ingest.sqlite3", "--project-label", "木梨家庭摄影工作室/摄影工作室/拍摄项目", "--host", "0.0.0.0", "--port", "18767", "--public-origin", "http://192.168.31.244:18767", "--allow-lan-origin", "--enable-project-writes", "--enable-source-removal", "--ingest-url", "http://192.168.31.244:18765"]

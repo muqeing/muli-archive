@@ -1,0 +1,81 @@
+# Independent operator console. Existing classifier, preview and Ingest containers stay unchanged.
+services:
+  archive-console:
+    image: muli-sorter:0.10.0
+    platform: linux/amd64
+    user: "1000:1001"
+    entrypoint: ["python", "-m", "muli_sorter.archive_console"]
+    command:
+      - --queue
+      - /queue
+      - --staging
+      - /staging
+      - --projects
+      - /projects
+      - --state
+      - /archive-state
+      - --state-db
+      - /ingest-state/ingest.sqlite3
+      - --project-label
+      - 木梨家庭摄影工作室/摄影工作室/拍摄项目
+      - --host
+      - 0.0.0.0
+      - --port
+      - "18767"
+      - --public-origin
+      - http://127.0.0.1:18767
+      - --enable-project-writes
+    ports:
+      - "127.0.0.1:18767:18767"
+    restart: unless-stopped
+    stop_grace_period: 45s
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json,urllib.request; r=json.load(urllib.request.urlopen('http://127.0.0.1:18767/health',timeout=5)); assert r['service']=='muli-sorter-console' and r['worker_running'] and r['submission_enabled'] and not r['example_data']"]
+      interval: 30s
+      timeout: 10s
+      start_period: 15s
+      retries: 3
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    cpus: "1"
+    mem_limit: 768m
+    pids_limit: 64
+    tmpfs:
+      - /tmp:size=32m
+    networks: [operator-only]
+    volumes:
+      - type: bind
+        source: /vol1/1000/木梨家庭摄影工作室/摄影工作室/服务器/素材分类服务
+        target: /queue
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: /vol2/1000/Docker/muli-ingest/state
+        target: /ingest-state
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: /vol1/1000/木梨家庭摄影工作室/摄影工作室/拍摄项目/素材中转
+        target: /staging
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: /vol1/1000/木梨家庭摄影工作室/摄影工作室/拍摄项目
+        target: /projects
+        read_only: false
+        bind: {create_host_path: false}
+      # Keep the staging path read-only even through the writable projects mount.
+      - type: bind
+        source: /vol1/1000/木梨家庭摄影工作室/摄影工作室/拍摄项目/素材中转
+        target: /projects/素材中转
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: /vol1/1000/木梨家庭摄影工作室/摄影工作室/服务器/素材归档服务
+        target: /archive-state
+        read_only: false
+        bind: {create_host_path: false}
+networks:
+  operator-only:
+    internal: true

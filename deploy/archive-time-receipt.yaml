@@ -1,0 +1,3 @@
+services:
+  archive-console:
+    image: muli-sorter:0.15.3

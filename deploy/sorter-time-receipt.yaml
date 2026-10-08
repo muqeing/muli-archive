@@ -1,0 +1,3 @@
+services:
+  muli-sorter:
+    image: muli-sorter:0.15.3

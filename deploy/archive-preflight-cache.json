@@ -1,0 +1,45 @@
+{
+  "services": {
+    "archive-console": {
+      "image": "muli-sorter:0.16.2-preflight-cache-1",
+      "command": [
+        "--queue",
+        "/queue",
+        "--staging",
+        "/staging",
+        "--projects",
+        "/projects",
+        "--state",
+        "/archive-state",
+        "--state-db",
+        "/ingest-state/ingest.sqlite3",
+        "--project-label",
+        "木梨家庭摄影工作室/摄影工作室/拍摄项目",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "18767",
+        "--public-origin",
+        "http://192.168.31.244:18767",
+        "--allow-lan-origin",
+        "--enable-project-writes",
+        "--enable-source-removal",
+        "--ingest-url",
+        "http://192.168.31.244:18765",
+        "--direct-move-root",
+        "/move-root"
+      ],
+      "volumes": [
+        {
+          "type": "bind",
+          "source": "/vol1/1000/木梨家庭摄影工作室/摄影工作室/拍摄项目",
+          "target": "/move-root",
+          "read_only": false,
+          "bind": {
+            "create_host_path": false
+          }
+        }
+      ]
+    }
+  }
+}

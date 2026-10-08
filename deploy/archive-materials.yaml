@@ -1,0 +1,5 @@
+# Material triage and linked sidecars; update archive-console only.
+# Apply after the existing 0.13.0/0.13.1/0.13.2 overlays.
+services:
+  archive-console:
+    image: muli-sorter:0.14.0

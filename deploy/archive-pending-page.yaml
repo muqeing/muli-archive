@@ -1,0 +1,5 @@
+# 0.16.1 candidate. Apply after the existing console configuration chain.
+# Only the operator console image changes; no mount, permission or media action.
+services:
+  archive-console:
+    image: muli-sorter:0.16.1

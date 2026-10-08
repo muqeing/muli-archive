@@ -1,0 +1,5 @@
+# UI-only update. Layer over the active 0.13.0 console/LAN/move configuration.
+# Apply only to archive-console with --no-deps; all other services stay unchanged.
+services:
+  archive-console:
+    image: muli-sorter:0.13.1

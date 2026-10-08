@@ -1,0 +1,11 @@
+services:
+  archive-console:
+    ports: !reset []
+    networks:
+      operator-only:
+        ipv4_address: 10.249.0.2
+networks:
+  operator-only:
+    ipam:
+      config:
+        - subnet: 10.249.0.0/29

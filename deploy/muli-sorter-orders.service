@@ -1,0 +1,32 @@
+[Unit]
+Description=Muli read-only Feishu order refresh
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=1000
+Group=1001
+WorkingDirectory=/vol2/1000/Docker/muli-sorter/releases/0.6
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/vol2/1000/Docker/muli-sorter/releases/0.6/src
+Environment=DOCKER_HOST=unix:///var/run/docker.sock
+ExecStart=/usr/bin/python3 -m muli_sorter.order_feed --queue /vol1/1000/木梨家庭摄影工作室/摄影工作室/服务器/素材分类服务 --projects /vol1/1000/木梨家庭摄影工作室/摄影工作室/拍摄项目 --staging /vol1/1000/木梨家庭摄影工作室/摄影工作室/拍摄项目/素材中转 --resource /vol2/1000/Docker/muli-sorter/orders-resource.json --folder-service-sha256 06e3cb2a22763e1bb7c02e31334a3d3ec2647d2e78d3a9a1a62096919a221342 --folder-service-module /home/木梨家庭影像工作室/docker/feishu-photo-folder-automation/scripts/photo_project_folder_service.py
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=75
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+ReadWritePaths=/vol1/1000/木梨家庭摄影工作室/摄影工作室/服务器/素材分类服务/order-feed
+CPUQuota=25%
+MemoryMax=256M
+TasksMax=32
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

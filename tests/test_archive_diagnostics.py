@@ -67,6 +67,20 @@ class DiagnosticsTests(Fixture, unittest.TestCase):
         for plan in (None, [], {'segments':None}, {'segments':[{'unit_ids':[{}]}]}):
             self.assertEqual(diagnostic_issues(ArchiveError('bad'), self.model, plan)[0]['reason'], 'bad')
 
+    def test_source_identity_difference_survives_file_location_context(self):
+        segment, unit = self.confirmed_unit()
+        file = unit['files'][0]
+        failed = ArchiveError('source identity changed')
+        differences = [{'field':'mtime_ns', 'expected':10, 'actual':20}]
+        failed.archive_location = {'changed_signature_fields':differences}
+        try:
+            with diagnostic_context(source_path=file['source_path']):
+                raise failed
+        except ArchiveError as exc:
+            issue = diagnostic_issues(exc,self.model,self.decisions)[0]
+        self.assertEqual(issue['changed_signature_fields'],differences)
+        self.assertEqual(issue['segments'][0]['segment_id'],segment['segment_id'])
+
     def test_move_failure_persists_file_and_recovery_clears_issue(self):
         self.service.move_enabled = True
         self.service.direct_move_view = {'root':str(self.root), 'staging':'staging', 'projects':'projects'}

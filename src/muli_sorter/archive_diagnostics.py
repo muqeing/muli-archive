@@ -55,8 +55,9 @@ def diagnostic_issues(exc, model=None, decisions=None):
              'units':[{'unit_id':u.get('unit_id'), 'capture_date':u.get('capture_date'),
                        'capture_time':u.get('capture_time')} for u in units],
              'files':files, 'target_path':location.get('target_path'),
+             'changed_signature_fields':location.get('changed_signature_fields', []),
              'project_id':project_id,
              'report_id':decisions.get('report_id') if mismatch else None,
              'current_report_id':model.get('report_id') if mismatch else None,
-             'guidance':('页面计划与后台清单版本不同，尚未核实具体变化的素材；不是已判定这些文件损坏。请先保存草稿，再核对新清单。'
+             'guidance':('这是整份页面计划与后台清单版本不一致，尚未开始检查具体素材，尚未核实哪些素材发生变化。请先保存草稿，重新加载页面，再用“查找旧报告草稿”核对并恢复仍存在的素材归属，重新确认后检查。'
                          if mismatch else '仅定位到当前检查失败的位置，其他素材是否通过尚未判定。')}]

@@ -17,7 +17,7 @@ from .archive_layout import STANDARD_FOLDERS
 from .archive_move import require_ingest_idle, request_batches
 from .archive_options import options_for
 from .archive_rename_io import STRATEGY, mount_id, rename_noreplace, view_roots
-from .archive_source import verify_sources
+from .archive_source import verify_sources, _attributes_touched_only
 from .archive_direct_journal import DirectJournal, ENTRY_STORAGE
 from .archive_direct_identical import require_identical_target
 from .archive_target_metadata import MetadataProofCache, check_named_target
@@ -39,7 +39,20 @@ def _checked(fd, name, row, expected=None, *, moved=False, content=False, verifi
             current = {'dev':info.st_dev, 'ino':info.st_ino, 'size':info.st_size,
                        'mtime_ns':info.st_mtime_ns, 'ctime_ns':info.st_ctime_ns}
             if current != verified_source:
-                raise ArchiveError('复用校验前来源文件身份改变：' + name)
+                # Before creating a rename intent, an attribute-only change may
+                # be proved by reading this source once. The returned fresh
+                # identity then binds the journal; later mutation checks stay
+                # strict and never adopt a new identity after the intent.
+                if not content or not _attributes_touched_only(current, verified_source):
+                    exc = ArchiveError('复用校验前来源文件身份改变：' + name)
+                    exc.archive_location = {'changed_signature_fields': [
+                        {'field':key, 'expected':verified_source.get(key), 'actual':value}
+                        for key, value in current.items() if verified_source.get(key) != value]}
+                    raise exc
+                if progress:
+                    progress(0)
+                if hash_fd(handle, **({'progress':progress} if progress else {})) != row['blake3']:
+                    raise ArchiveError('来源文件属性变化且内容摘要与成功清单不一致：' + name)
         elif content and hash_fd(handle, **({'progress':progress} if progress else {})) != row['blake3']:
             raise ArchiveError('直接移动内容与成功清单不一致：' + name)
         again = open_file(fd, name)
@@ -224,9 +237,14 @@ def _run_locked(service, job, request, sources, targets, requests, receipts):
                         proof = proofs.get(row['source_path'])
                         job['phase'] = ('核对已校验文件身份：' if proof else '直接移动前完整核对内容：') + PurePosixPath(row['source_path']).name
                         verified_bytes = job['verification']['checked_bytes']
+                        source_hashed = False
                         def reading(amount):
+                            nonlocal source_hashed
                             if service.stop_event.is_set():
                                 raise ArchiveError('服务停止，尚未移动素材')
+                            if proof and not source_hashed:
+                                job['phase'] = '来源属性变化，重新核对本文件内容：' + PurePosixPath(row['source_path']).name
+                            source_hashed = True
                             job['verification']['checked_bytes'] += amount
                             progress()
                         progress()
@@ -261,7 +279,7 @@ def _run_locked(service, job, request, sources, targets, requests, receipts):
                         planned_targets[row['target_path']] = row
                         job['verification']['checked_files'] += 1
                         job['verification']['checked_bytes'] = verified_bytes + row['size_bytes']
-                        job['verification']['reused_files' if proof else 'hashed_files'] += 1
+                        job['verification']['reused_files' if proof and not source_hashed else 'hashed_files'] += 1
         progress(force=True)
         if _evidence(service, selected) != request['source_evidence']:
             raise ArchiveError('直接移动前成功清单发生变化')

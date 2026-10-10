@@ -84,6 +84,25 @@ class ReceiptReuseTests(unittest.TestCase):
         self.assertEqual(done['status'], 'failed', done)
         self.assertTrue(all((self.root/'staging'/p).exists() for p in job['file_plans']))
 
+    def test_attribute_change_after_confirmation_rehashes_only_changed_file_and_moves(self):
+        from muli_sorter.archive_direct_move import hash_fd
+        job=self.submit();before={p:(self.root/'staging'/p).stat().st_ino for p in job['file_plans']}
+        changed=next(iter(job['file_plans']));source=self.root/'staging'/changed
+        original_digest=job['request_digest']
+        os.chmod(source,0o640 if source.stat().st_mode & 0o777 != 0o640 else 0o600)
+        with patch('muli_sorter.archive_direct_move.hash_fd',wraps=hash_fd) as reads:
+            done=self.service.run_job(job['job_id'])
+        self.assertEqual(done['status'],'completed',done)
+        self.assertEqual(reads.call_count,1)
+        self.assertEqual(done['verification']['hashed_files'],1)
+        self.assertEqual(done['verification']['reused_files'],11)
+        self.assertEqual(done['verification']['checked_bytes'],done['verification']['total_bytes'])
+        self.assertEqual(done['request_digest'],original_digest)
+        self.assertEqual(done['summary']['direct_moved_files'],12)
+        for p,row in job['file_plans'].items():
+            self.assertFalse((self.root/'staging'/p).exists())
+            self.assertEqual((self.root/'projects'/row['target_path']).stat().st_ino,before[p])
+
     def test_changed_source_after_prepare_blocks_first_rename(self):
         from muli_sorter.archive_direct_move import _checked
         job = self.submit();changed=[]

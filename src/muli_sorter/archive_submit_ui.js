@@ -386,9 +386,14 @@
     (Array.isArray(issues) ? issues : []).forEach(function (issue) {
       if (!issue || typeof issue !== "object") return;
       var box = make("div", "panel archive-issue");
+      var snapshotChanged = issue.scope === "plan" && !!issue.report_id && !!issue.current_report_id;
       var scopes = { file: "文件检查失败", unit: "素材检查失败", segment: "拍摄段检查失败", project: "项目检查失败", plan: "整份计划检查未通过" };
-      box.appendChild(make("strong", "", scopes[issue.scope] || "归档检查未通过"));
-      box.appendChild(make("p", "warning", String(issue.reason || "原因尚未明确")));
+      box.appendChild(make("strong", "", snapshotChanged ? "页面素材清单已更新" : scopes[issue.scope] || "归档检查未通过"));
+      box.appendChild(make("p", "warning", snapshotChanged ? "当前页面的归档计划需要与新清单重新核对，尚未检查或移动素材。" : String(issue.reason || "原因尚未明确")));
+      var fields = { dev: "磁盘身份", ino: "文件身份", size: "文件大小", mtime_ns: "内容修改时间", ctime_ns: "属性变更时间" };
+      (Array.isArray(issue.changed_signature_fields) ? issue.changed_signature_fields : []).forEach(function (change) {
+        box.appendChild(make("p", "", "变化字段：" + String(fields[change.field] || change.field) + " · 检查时：" + String(change.expected) + " · 当前：" + String(change.actual)));
+      });
       (Array.isArray(issue.segments) ? issue.segments : []).forEach(function (segment) {
         var line = make("p", "", "拍摄段：" + String(segment.label || "未命名拍摄段") + " · 编号：" + String(segment.segment_id || "未提供"));
         var card = Array.prototype.find.call(document.querySelectorAll("[data-segment-id]"), function (element) {

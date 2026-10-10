@@ -13,6 +13,7 @@ import stat
 import threading
 import time
 
+from .archive_diagnostics import diagnostic_context, diagnostic_issues
 from .archive import _unit, record, recover_index
 from .archive_io import ArchiveError, atomic_json, directory, exclusive_lock, subdirectory, persistent_identity
 from .archive_source import verify_sources
@@ -256,58 +257,60 @@ class ArchiveJobs:
         archived = None
         selected, projects, targets = [], {}, set()
         for assignment in compiled['assignments']:
-            project = copy_project(assignment['project'])
-            parts = relative(project['path'])
-            if len(parts) != 3 or not re.fullmatch(r'20\d{2}', parts[0]) or not re.fullmatch(r'(?:0?[1-9]|1[0-2])月', parts[1]):
-                raise ArchiveError('项目必须位于已核定的年份、月份目录下')
-            projects[project['path']] = project
-            candidates = None
-            for uid in assignment['unit_ids']:
-                raw_unit = units[uid]
-                unit = {k:v for k,v in raw_unit.items() if k != '_proxy_archive_authorized'}
-                parent_id = links.get(uid)
-                if parent_id:
-                    parent = {k:v for k,v in units[parent_id].items() if k != '_proxy_archive_authorized'}
-                    if parent_id in authorized_proxy_ids:
-                        parent['_proxy_archive_authorized'] = True
-                    parent_assignment = assignments_by_unit.get(parent_id)
-                    prior = None
-                    if parent_assignment:
-                        if parent_assignment['project']['path'] != project['path']:
-                            raise ArchiveError('附属文件与主视频必须归属同一项目')
-                    else:
-                        if parent_id in authorized_proxy_ids:
-                            raise ArchiveError('已批准 LRF 代理与附属文件必须在本次确认计划中共同选择')
-                        if archived is None:
-                            needed_parents = {links[u] for u in assignments_by_unit if u in links and links[u] not in assignments_by_unit}
-                            archived = {r['unit_id']:r for r in self.history.for_units(model, needed_parents)['archived_units'] if r['in_current_model']}
-                        prior = archived.get(parent_id)
-                        if prior is None:
-                            raise ArchiveError('请先确认主视频归属，或核对其归档记录后补齐附属文件')
-                    rows = companion_rows(unit, parent, project, archived=prior, label=self.label)
-                    unit = {**unit, '_companion_parent':parent}
-                else:
-                    if uid in authorized_proxy_ids:
-                        unit['_proxy_archive_authorized'] = True
-                    if (unit['kind'] not in ('photo','video','audio','proxy_only') or
-                            (unit['kind'] == 'proxy_only' and uid not in authorized_proxy_ids) or
-                            any(PurePosixPath(f['name']).name.startswith('._') for f in unit['files']) or
-                            all(support_reason(f) for f in unit['files'])):
-                        raise ArchiveError('设备附属文件无需选择项目；关系未确认的素材请在异常区域核对')
-                    rows = studio_target_rows(unit,project)
-                if not parent_id and project.get('evidence_source') != 'manual_no_order':
-                    # Candidate membership is shared by the reviewed segment.
-                    if candidates is None:
-                        candidates = {pid for u in assignment['unit_ids']
-                                      for pid in units[u].get('candidate_project_ids', [])}
-                    if assignment['project']['project_id'] not in candidates:
-                        raise ArchiveError('所选项目不属于该拍摄段候选，请重新选择')
-                for row in rows:
-                    key = fold(row['target_path'])
-                    if key in targets and options['existing']=='error':
-                        raise ArchiveError('同一项目存在同名素材，需核对后再归档：'+row['target_name'])
-                    targets.add(key)
-                selected.append({'unit':unit,'project':project,'rows':rows})
+            with diagnostic_context(segment_id=assignment.get('segment_id'), project_id=assignment['project']['project_id']):
+                project = copy_project(assignment['project'])
+                parts = relative(project['path'])
+                if len(parts) != 3 or not re.fullmatch(r'20\d{2}', parts[0]) or not re.fullmatch(r'(?:0?[1-9]|1[0-2])月', parts[1]):
+                    raise ArchiveError('项目必须位于已核定的年份、月份目录下')
+                projects[project['path']] = project
+                candidates = None
+                for uid in assignment['unit_ids']:
+                    with diagnostic_context(unit_id=uid):
+                        raw_unit = units[uid]
+                        unit = {k:v for k,v in raw_unit.items() if k != '_proxy_archive_authorized'}
+                        parent_id = links.get(uid)
+                        if parent_id:
+                            parent = {k:v for k,v in units[parent_id].items() if k != '_proxy_archive_authorized'}
+                            if parent_id in authorized_proxy_ids:
+                                parent['_proxy_archive_authorized'] = True
+                            parent_assignment = assignments_by_unit.get(parent_id)
+                            prior = None
+                            if parent_assignment:
+                                if parent_assignment['project']['path'] != project['path']:
+                                    raise ArchiveError('附属文件与主视频必须归属同一项目')
+                            else:
+                                if parent_id in authorized_proxy_ids:
+                                    raise ArchiveError('已批准 LRF 代理与附属文件必须在本次确认计划中共同选择')
+                                if archived is None:
+                                    needed_parents = {links[u] for u in assignments_by_unit if u in links and links[u] not in assignments_by_unit}
+                                    archived = {r['unit_id']:r for r in self.history.for_units(model, needed_parents)['archived_units'] if r['in_current_model']}
+                                prior = archived.get(parent_id)
+                                if prior is None:
+                                    raise ArchiveError('请先确认主视频归属，或核对其归档记录后补齐附属文件')
+                            rows = companion_rows(unit, parent, project, archived=prior, label=self.label)
+                            unit = {**unit, '_companion_parent':parent}
+                        else:
+                            if uid in authorized_proxy_ids:
+                                unit['_proxy_archive_authorized'] = True
+                            if (unit['kind'] not in ('photo','video','audio','proxy_only') or
+                                    (unit['kind'] == 'proxy_only' and uid not in authorized_proxy_ids) or
+                                    any(PurePosixPath(f['name']).name.startswith('._') for f in unit['files']) or
+                                    all(support_reason(f) for f in unit['files'])):
+                                raise ArchiveError('设备附属文件无需选择项目；关系未确认的素材请在异常区域核对')
+                            rows = studio_target_rows(unit,project)
+                        if not parent_id and project.get('evidence_source') != 'manual_no_order':
+                            # Candidate membership is shared by the reviewed segment.
+                            if candidates is None:
+                                candidates = {pid for u in assignment['unit_ids']
+                                              for pid in units[u].get('candidate_project_ids', [])}
+                            if assignment['project']['project_id'] not in candidates:
+                                raise ArchiveError('所选项目不属于该拍摄段候选，请重新选择')
+                        for row in rows:
+                            key = fold(row['target_path'])
+                            if key in targets and options['existing']=='error':
+                                raise ArchiveError('同一项目存在同名素材，需核对后再归档：'+row['target_name'])
+                            targets.add(key)
+                        selected.append({'unit':unit,'project':project,'rows':rows})
         selected.sort(key=lambda item: bool(item['unit'].get('_companion_parent')))
         key = sorted([{'unit_id':r['unit']['unit_id'],'path':r['project']['path'],'files':r['rows']} for r in selected], key=lambda r:r['unit_id'])
         job_id = digest({'storage':'independent_copy','targets':key,'roots':self.identity})
@@ -338,10 +341,11 @@ class ArchiveJobs:
             # through a generic repeat submission.
             with directory(self.state/'units') as existing_units:
                 for item in selected:
-                    identity={'unit_id':item['unit']['unit_id'],'project_id':item['project']['project_id'],
-                              'project_path':item['project']['path'],'files':item['rows']}
-                    if record(existing_units, 'job-'+digest(identity)+'.json') is not None:
-                        raise ArchiveError('所选素材已有归档执行记录；复制后保留的来源不能通过重复提交移动清理。请先核对已有结果，本次尚未读取目标内容或提交任务。')
+                    with diagnostic_context(unit_id=item['unit']['unit_id'], project_id=item['project']['project_id']):
+                        identity={'unit_id':item['unit']['unit_id'],'project_id':item['project']['project_id'],
+                                  'project_path':item['project']['path'],'files':item['rows']}
+                        if record(existing_units, 'job-'+digest(identity)+'.json') is not None:
+                            raise ArchiveError('所选素材已有归档执行记录；复制后保留的来源不能通过重复提交移动清理。请先核对已有结果，本次尚未读取目标内容或提交任务。')
         self.target_digests.reserve(sum(len(i['rows']) for i in selected) * 2)
         if progress:
             progress(total_files=sum(len(i['rows']) for i in selected), checked_files=0)
@@ -377,98 +381,102 @@ class ArchiveJobs:
         with directory(self.projects) as fd, directory(self.state/'units') as units_fd:
             reservations = record(self.state_fd, 'reservations.json', {})
             for path, project in projects.items():
-                if progress:
-                    progress(phase='核对项目目录', current_file='')
-                found = _inspect(fd, path)
-                captured = (accepted or {}).get('target_identities', {}).get(path)
-                if captured is not None and found != captured:
-                    raise ArchiveError('已确认的项目目录身份已变化：' + path)
-                if found is None and project.get('order_id') and any(p != path for p in current_orders.get(project['order_id'], [])):
-                    raise ArchiveError('同一订单出现其他目录，停止重复创建：' + path)
-                if found is None:
-                    if path in prior_folders:
-                        raise ArchiveError('本任务已创建的项目目录消失：' + path)
-                    if project.get('folder_action') not in ('create_manual_after_confirmed_assignment','create_after_confirmed_assignment'):
-                        raise ArchiveError('原有项目目录已消失，请重新核对：' + path)
-                    if project.get('folder_action') == 'create_after_confirmed_assignment':
-                        live = self.model()
-                        current = next((p for p in live['projects'] if p['path']==path),None)
-                        if not current or current.get('order_id') != project.get('order_id') or not current.get('order_evidence'):
-                            raise ArchiveError('缺少当前有效订单信息，暂不能创建订单目录')
-                    action = 'create'
-                else:
-                    is_new = project.get('folder_action') in ('create_manual_after_confirmed_assignment','create_after_confirmed_assignment')
-                    if is_new and prior_folders.get(path) != found:
-                        raise ArchiveError('待建目录已被占用，请刷新候选后核对：' + path)
-                    action = 'existing'
-                folders[path] = found
-                missing = [name for name in STANDARD_FOLDERS if _inspect(fd,path+'/'+name) is None]
-                subset = [r for r in selected if r['project']['path']==path]
-                destinations = {}
-                for item in subset:
-                    for file in item['rows']:
-                        category = str(PurePosixPath(file['target_path']).parent.relative_to(path))
-                        destinations[category] = destinations.get(category,0)+1
-                project_rows.append({'name':project['name'],'path':self.label.rstrip('/')+'/'+path,'relative_path':path,
-                                     'action':action,'units':len(subset),'files':sum(len(r['rows']) for r in subset),
-                                     'bytes':sum(f['size_bytes'] for r in subset for f in r['rows']),
-                                     'create_subfolders':missing,'destinations':destinations})
+                with diagnostic_context(project_id=project['project_id'], target_path=path):
+                    if progress:
+                        progress(phase='核对项目目录', current_file='')
+                    found = _inspect(fd, path)
+                    captured = (accepted or {}).get('target_identities', {}).get(path)
+                    if captured is not None and found != captured:
+                        raise ArchiveError('已确认的项目目录身份已变化：' + path)
+                    if found is None and project.get('order_id') and any(p != path for p in current_orders.get(project['order_id'], [])):
+                        raise ArchiveError('同一订单出现其他目录，停止重复创建：' + path)
+                    if found is None:
+                        if path in prior_folders:
+                            raise ArchiveError('本任务已创建的项目目录消失：' + path)
+                        if project.get('folder_action') not in ('create_manual_after_confirmed_assignment','create_after_confirmed_assignment'):
+                            raise ArchiveError('原有项目目录已消失，请重新核对：' + path)
+                        if project.get('folder_action') == 'create_after_confirmed_assignment':
+                            live = self.model()
+                            current = next((p for p in live['projects'] if p['path']==path),None)
+                            if not current or current.get('order_id') != project.get('order_id') or not current.get('order_evidence'):
+                                raise ArchiveError('缺少当前有效订单信息，暂不能创建订单目录')
+                        action = 'create'
+                    else:
+                        is_new = project.get('folder_action') in ('create_manual_after_confirmed_assignment','create_after_confirmed_assignment')
+                        if is_new and prior_folders.get(path) != found:
+                            raise ArchiveError('待建目录已被占用，请刷新候选后核对：' + path)
+                        action = 'existing'
+                    folders[path] = found
+                    missing = [name for name in STANDARD_FOLDERS if _inspect(fd,path+'/'+name) is None]
+                    subset = [r for r in selected if r['project']['path']==path]
+                    destinations = {}
+                    for item in subset:
+                        with diagnostic_context(unit_id=item['unit']['unit_id'], project_id=item['project']['project_id']):
+                            for file in item['rows']:
+                                category = str(PurePosixPath(file['target_path']).parent.relative_to(path))
+                                destinations[category] = destinations.get(category,0)+1
+                    project_rows.append({'name':project['name'],'path':self.label.rstrip('/')+'/'+path,'relative_path':path,
+                                         'action':action,'units':len(subset),'files':sum(len(r['rows']) for r in subset),
+                                         'bytes':sum(f['size_bytes'] for r in subset for f in r['rows']),
+                                         'create_subfolders':missing,'destinations':destinations})
             verified_files = 0
             directory_listings = {}
             parent_identities = {}
             for item in selected:
-                unit = item['unit']
-                if progress:
-                    progress(phase='第2/2阶段：核对所选来源与目标身份', checked_files=verified_files,
-                             current_file=PurePosixPath(item['rows'][0]['name']).name)
-                evidence[unit['unit_id']] = self._verify(unit, cache, validated_signatures, runtime_provider=selected_runtime)
-                identity = {'unit_id':unit['unit_id'],'project_id':item['project']['project_id'],
-                            'project_path':item['project']['path'],'files':item['rows']}
-                old = record(units_fd, 'job-'+digest(identity)+'.json')
-                for row in item['rows']:
-                    remaining = row['size_bytes']
-                    reservation = reservations.get(row['source_path'])
-                    expected = {'target_path':row['target_path'],'blake3':row['blake3']}
-                    if reservation is not None and reservation != expected:
-                        raise ArchiveError('素材已经提交过其他归档归属，请先核对已有结果')
-                    parent = str(PurePosixPath(row['target_path']).parent)
-                    if parent not in parent_identities:
-                        parent_identities[parent] = _inspect(fd, parent)
-                    if parent_identities[parent] is not None:
-                        with subdirectory(fd,parent) as target_fd:
-                            if parent not in directory_listings:
-                                info = os.fstat(target_fd)
-                                listing = {}
-                                for name in os.listdir(target_fd):
-                                    listing.setdefault(fold(name), []).append(name)
-                                directory_listings[parent] = (listing, (info.st_dev,info.st_ino,info.st_mtime_ns,info.st_ctime_ns))
-                            listing = directory_listings[parent][0]
-                            for name in (row['target_name'], row['temp']):
-                                # Check aliases without treating regular files as directories.
-                                aliases = [n for n in listing.get(fold(name), ()) if n != name]
-                                if aliases:
-                                    raise ArchiveError('目标文件名称存在冲突：'+row['target_name'])
-                                try:
-                                    info = os.stat(name,dir_fd=target_fd,follow_symlinks=False)
-                                except FileNotFoundError:
-                                    continue
-                                if name==row['target_name'] and options['existing']=='skip_identical':
-                                    if not same_content(target_fd,name,row,cache=self.target_digests,
-                                            progress=(lambda count: progress(bytes_delta=count)) if progress else None):
-                                        raise ArchiveError('预定目标内容发生变化，请重新检查：'+name)
-                                    remaining = 0
-                                    continue
-                                if old is None or old.get('identity') != identity:
-                                    raise ArchiveError('目标存在未登记文件，禁止覆盖：'+row['target_name'])
-                                if not stat.S_ISREG(info.st_mode):
-                                    raise ArchiveError('归档目标或临时文件类型发生变化')
-                                if info.st_size > row['size_bytes']:
-                                    raise ArchiveError('已登记目标大小超出原素材')
-                                remaining = min(remaining, row['size_bytes'] - info.st_size)
-                    required += remaining
-                    verified_files += 1
+                with diagnostic_context(unit_id=item['unit']['unit_id'], project_id=item['project']['project_id']):
+                    unit = item['unit']
                     if progress:
-                        progress(checked_files=verified_files)
+                        progress(phase='第2/2阶段：核对所选来源与目标身份', checked_files=verified_files,
+                                 current_file=PurePosixPath(item['rows'][0]['name']).name)
+                    evidence[unit['unit_id']] = self._verify(unit, cache, validated_signatures, runtime_provider=selected_runtime)
+                    identity = {'unit_id':unit['unit_id'],'project_id':item['project']['project_id'],
+                                'project_path':item['project']['path'],'files':item['rows']}
+                    old = record(units_fd, 'job-'+digest(identity)+'.json')
+                    for row in item['rows']:
+                        with diagnostic_context(source_path=row['source_path'], name=row['name'], target_path=row['target_path']):
+                            remaining = row['size_bytes']
+                            reservation = reservations.get(row['source_path'])
+                            expected = {'target_path':row['target_path'],'blake3':row['blake3']}
+                            if reservation is not None and reservation != expected:
+                                raise ArchiveError('素材已经提交过其他归档归属，请先核对已有结果')
+                            parent = str(PurePosixPath(row['target_path']).parent)
+                            if parent not in parent_identities:
+                                parent_identities[parent] = _inspect(fd, parent)
+                            if parent_identities[parent] is not None:
+                                with subdirectory(fd,parent) as target_fd:
+                                    if parent not in directory_listings:
+                                        info = os.fstat(target_fd)
+                                        listing = {}
+                                        for name in os.listdir(target_fd):
+                                            listing.setdefault(fold(name), []).append(name)
+                                        directory_listings[parent] = (listing, (info.st_dev,info.st_ino,info.st_mtime_ns,info.st_ctime_ns))
+                                    listing = directory_listings[parent][0]
+                                    for name in (row['target_name'], row['temp']):
+                                        # Check aliases without treating regular files as directories.
+                                        aliases = [n for n in listing.get(fold(name), ()) if n != name]
+                                        if aliases:
+                                            raise ArchiveError('目标文件名称存在冲突：'+row['target_name'])
+                                        try:
+                                            info = os.stat(name,dir_fd=target_fd,follow_symlinks=False)
+                                        except FileNotFoundError:
+                                            continue
+                                        if name==row['target_name'] and options['existing']=='skip_identical':
+                                            if not same_content(target_fd,name,row,cache=self.target_digests,
+                                                    progress=(lambda count: progress(bytes_delta=count)) if progress else None):
+                                                raise ArchiveError('预定目标内容发生变化，请重新检查：'+name)
+                                            remaining = 0
+                                            continue
+                                        if old is None or old.get('identity') != identity:
+                                            raise ArchiveError('目标存在未登记文件，禁止覆盖：'+row['target_name'])
+                                        if not stat.S_ISREG(info.st_mode):
+                                            raise ArchiveError('归档目标或临时文件类型发生变化')
+                                        if info.st_size > row['size_bytes']:
+                                            raise ArchiveError('已登记目标大小超出原素材')
+                                        remaining = min(remaining, row['size_bytes'] - info.st_size)
+                            required += remaining
+                            verified_files += 1
+                            if progress:
+                                progress(checked_files=verified_files)
             total = sum(f['size_bytes'] for r in selected for f in r['rows'])
             for parent, expected in parent_identities.items():
                 if _inspect(fd, parent) != expected:
@@ -514,6 +522,7 @@ class ArchiveJobs:
             self.preflight_lock.release()
 
     def _preflight(self, decisions, *, progress=None):
+        model = None
         try:
             if progress:
                 progress(phase='读取当前素材清单')
@@ -546,7 +555,8 @@ class ArchiveJobs:
                                       'prepared':prepared,'expires_at':time.time()+1200}
             return self.confirmation(seal)
         except (OSError, ValueError, KeyError, TypeError) as exc:
-            return {'status':'blocked','errors':[str(exc)],'projects':[]}
+            return {'status':'blocked','errors':[str(exc)],'projects':[],
+                    'issues':diagnostic_issues(exc, model, decisions)}
 
     def confirmation(self, preview_id):
         """Restore one unexpired confirmation without reopening a review/model."""
@@ -597,11 +607,12 @@ class ArchiveJobs:
                 progress(phase='保存本次归档任务', current_file='')
             reservations = record(self.state_fd, 'reservations.json', {})
             for row in fresh['file_plans'].values():
-                prior = reservations.get(row['source_path'])
-                reservation = {'target_path':row['target_path'],'blake3':row['blake3']}
-                if prior is not None and prior != reservation:
-                    raise ArchiveError('本次素材已被另一份归档计划占用，请保留原任务并核对')
-                reservations[row['source_path']] = reservation
+                with diagnostic_context(source_path=row['source_path'], name=row.get('name'), target_path=row['target_path']):
+                    prior = reservations.get(row['source_path'])
+                    reservation = {'target_path':row['target_path'],'blake3':row['blake3']}
+                    if prior is not None and prior != reservation:
+                        raise ArchiveError('本次素材已被另一份归档计划占用，请保留原任务并核对')
+                    reservations[row['source_path']] = reservation
             save_json(self.state/'requests'/('request-'+job_id+'.json'),request)
             atomic_json(self.state_fd, 'reservations.json', reservations)
             s=fresh['summary']
@@ -627,7 +638,7 @@ class ArchiveJobs:
             job=self.get(job_id)
             if job['status'] not in ('partial','failed'):
                 return job
-            job.update(status='queued',phase='等待继续归档',errors=[])
+            job.update(status='queued',phase='等待继续归档',errors=[],issues=[])
             self._save(job)
             self.wake.set()
             return job
@@ -643,6 +654,7 @@ class ArchiveJobs:
         job=self.get(job_id)
         if not self.enabled or job['status'] == 'completed':
             return job
+        model, decisions = None, None
         try:
             request=read_json(self.state/'requests'/('request-'+job_id+'.json'))
             if digest(request) != job['request_digest'] or request['roots'] != self.identity:
@@ -668,7 +680,8 @@ class ArchiveJobs:
             if job.get('cleanup_started') and job['status'] == 'running':
                 return finish_move(self,job,request)
         except (OSError,ValueError,KeyError,TypeError) as exc:
-            job.update(status='failed',phase='归档暂停，需要核对',errors=[str(exc)])
+            job.update(status='failed',phase='归档暂停，需要核对',errors=[str(exc)],
+                       issues=diagnostic_issues(exc, model, decisions))
             if job.get('execution_strategy') == 'same_volume_rename/v1':
                 job.update(direct_move_recovery_required=True,
                            phase='同卷直接移动已暂停；已移入文件保留，继续前将按记录回读')
@@ -682,7 +695,7 @@ class ArchiveJobs:
         prepared=self._prepare(model,decisions,accepted=job)
         if prepared['job_id'] != job_id:
             raise ArchiveError('归档任务身份不一致')
-        job.update(status='running',phase='创建并核对项目目录',errors=[])
+        job.update(status='running',phase='创建并核对项目目录',errors=[],issues=[])
         self._save(job)
         with directory(self.staging) as source, directory(self.projects) as projects, directory(self.state/'units') as units_fd:
             for row in prepared['projects']:
@@ -738,7 +751,9 @@ class ArchiveJobs:
                                  skip_identical=prepared['archive_options']['existing']=='skip_identical')
                     result['bytes']=sum(f['size_bytes'] for f in unit['files'])
                 except (OSError,ValueError,KeyError,TypeError) as exc:
-                    result={'unit_id':unit['unit_id'],'status':'incomplete','files':len(unit['files']),'error':str(exc)}
+                    exc.archive_location = {'unit_id':unit['unit_id'], **getattr(exc, 'archive_location', {})}
+                    result={'unit_id':unit['unit_id'],'status':'incomplete','files':len(unit['files']),'error':str(exc),
+                            'issues':diagnostic_issues(exc, model, decisions)}
                 outcomes.append(result)
                 done=[o for o in outcomes if o['status']=='completed']
                 job['outcomes']=outcomes

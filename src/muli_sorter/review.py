@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from hashlib import sha256
 import json
 import re
+from .archive_diagnostics import diagnostic_context
 from .intake import relative
 from .manual_projects import ManualProjectError, manual_catalog
 
@@ -219,33 +220,34 @@ def validate_decisions(model, plan):
     manual_scope_checks = []
     keys = {"segment_id", "label", "unit_ids", "project_id", "decision", "acknowledge_date_mismatch"}
     for s in segments:
-        if not isinstance(s, dict) or set(s) != keys:
-            raise ReviewError("拍摄段字段不符")
-        if not isinstance(s["segment_id"], str) or not 1 <= len(s["segment_id"]) <= 120 or s["segment_id"] in ids:
-            raise ReviewError("拍摄段编号无效或重复")
-        ids.add(s["segment_id"])
-        if not isinstance(s["label"], str) or len(s["label"]) > 160:
-            raise ReviewError("拍摄段名称过长或无效")
-        members = _unique_strings(s["unit_ids"], "素材单元")
-        if not members or members - units.keys() or seen & members:
-            raise ReviewError("素材单元未知、重复或空拍摄段")
-        seen |= members
-        if s["decision"] not in ("pending", "confirmed", "deferred") or type(s["acknowledge_date_mismatch"]) is not bool:
-            raise ReviewError("拍摄段状态无效")
-        project_id = s["project_id"]
-        if project_id is not None and (not isinstance(project_id, str) or project_id not in projects):
-            raise ReviewError("项目不在当前目录或已核对的自建项目计划中")
-        if (project_id in manual_scopes and not members.intersection(manual_scopes[project_id]) and
-                not any(linked.get(uid) in manual_scopes[project_id] for uid in members) and
-                not any(units[uid].get("capture_date") == manual_dates[project_id] for uid in members)):
-            manual_scope_checks.append((project_id, members))
-        if s["decision"] == "confirmed":
-            if project_id is None:
-                raise ReviewError("确认归属前必须选定项目")
-            dates = projects[project_id].get("dates", [])
-            mismatch = any(units[uid].get("capture_date") not in dates for uid in members)
-            if mismatch and not s["acknowledge_date_mismatch"]:
-                raise ReviewError("跨日期或日期未知的选择需要显式确认")
+        with diagnostic_context(segment_id=s.get('segment_id') if isinstance(s, dict) else None):
+            if not isinstance(s, dict) or set(s) != keys:
+                raise ReviewError("拍摄段字段不符")
+            if not isinstance(s["segment_id"], str) or not 1 <= len(s["segment_id"]) <= 120 or s["segment_id"] in ids:
+                raise ReviewError("拍摄段编号无效或重复")
+            ids.add(s["segment_id"])
+            if not isinstance(s["label"], str) or len(s["label"]) > 160:
+                raise ReviewError("拍摄段名称过长或无效")
+            members = _unique_strings(s["unit_ids"], "素材单元")
+            if not members or members - units.keys() or seen & members:
+                raise ReviewError("素材单元未知、重复或空拍摄段")
+            seen |= members
+            if s["decision"] not in ("pending", "confirmed", "deferred") or type(s["acknowledge_date_mismatch"]) is not bool:
+                raise ReviewError("拍摄段状态无效")
+            project_id = s["project_id"]
+            if project_id is not None and (not isinstance(project_id, str) or project_id not in projects):
+                raise ReviewError("项目不在当前目录或已核对的自建项目计划中")
+            if (project_id in manual_scopes and not members.intersection(manual_scopes[project_id]) and
+                    not any(linked.get(uid) in manual_scopes[project_id] for uid in members) and
+                    not any(units[uid].get("capture_date") == manual_dates[project_id] for uid in members)):
+                manual_scope_checks.append((project_id, members))
+            if s["decision"] == "confirmed":
+                if project_id is None:
+                    raise ReviewError("确认归属前必须选定项目")
+                dates = projects[project_id].get("dates", [])
+                mismatch = any(units[uid].get("capture_date") not in dates for uid in members)
+                if mismatch and not s["acknowledge_date_mismatch"]:
+                    raise ReviewError("跨日期或日期未知的选择需要显式确认")
     if seen != units.keys():
         raise ReviewError("计划遗漏了素材单元，未决定的素材也应保留为待处理")
     # A same-date segment may reuse a manual project created in another segment.

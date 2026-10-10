@@ -9,6 +9,7 @@ import os
 from pathlib import PurePosixPath
 import time
 
+from .archive_diagnostics import diagnostic_context
 from .archive import exists, now, record, recover_index
 from .archive_io import (ArchiveError, atomic_json, directory, hash_fd, open_file,
                          persistent_identity, signature, subdirectory)
@@ -57,11 +58,12 @@ def _evidence(service, selected, cache=None):
     cache = {} if cache is None else cache
     result = {}
     for item in selected:
-        unit = item['unit']
-        result[unit['unit_id']] = verify_sources(
-            service.staging, unit, service.runtime, production=service.production,
-            reviewed_metadata=True, cache=cache, check_media=False,
-            companion_parent=unit.get('_companion_parent'))
+        with diagnostic_context(unit_id=item['unit']['unit_id'], project_id=item['project']['project_id']):
+            unit = item['unit']
+            result[unit['unit_id']] = verify_sources(
+                service.staging, unit, service.runtime, production=service.production,
+                reviewed_metadata=True, cache=cache, check_media=False,
+                companion_parent=unit.get('_companion_parent'))
     return result
 
 
@@ -94,7 +96,8 @@ def _confirmed_parents(job, request, targets):
 def _target_listing(targets, plans):
     rows = {}
     for row in plans.values():
-        rows.setdefault(str(PurePosixPath(row['target_path']).parent), []).append(row)
+        with diagnostic_context(source_path=row['source_path'], name=row.get('name'), target_path=row['target_path']):
+            rows.setdefault(str(PurePosixPath(row['target_path']).parent), []).append(row)
     result = {}
     for path, items in rows.items():
         with subdirectory(targets, path) as fd:
@@ -103,9 +106,10 @@ def _target_listing(targets, plans):
             for name in os.listdir(fd):
                 aliases.setdefault(fold(name), []).append(name)
             for row in items:
-                for name in (row['target_name'], row['temp']):
-                    if any(existing != name for existing in aliases.get(fold(name), ())):
-                        raise ArchiveError('目标文件名称存在冲突：' + name)
+                with diagnostic_context(source_path=row['source_path'], name=row.get('name'), target_path=row['target_path']):
+                    for name in (row['target_name'], row['temp']):
+                        if any(existing != name for existing in aliases.get(fold(name), ())):
+                            raise ArchiveError('目标文件名称存在冲突：' + name)
             if signature(fd) != before:
                 raise ArchiveError('读取目标目录期间内容变化：' + path)
             result[path] = (persistent_identity(fd), before)
@@ -206,57 +210,58 @@ def _run_locked(service, job, request, sources, targets, requests, receipts):
                                'reused_files':0, 'hashed_files':0}
         for item in selected:
             for row in item['rows']:
-                if service.stop_event.is_set():
-                    raise ArchiveError('服务停止，尚未移动素材')
-                with subdirectory(sources, str(PurePosixPath(row['source_path']).parent)) as src, subdirectory(targets, str(PurePosixPath(row['target_path']).parent), create=True) as dst:
-                    parent = str(PurePosixPath(row['target_path']).parent)
-                    if confirmed and persistent_identity(dst) != listings[parent][0]:
-                        raise ArchiveError('执行前目标子目录被替换：' + parent)
-                    if mount_id(src) != mount_id(dst):
-                        raise ArchiveError('执行前挂载发生变化，保留来源')
-                    if exists(dst, row['temp']):
-                        raise ArchiveError('直接移动临时文件被占用')
-                    proof = proofs.get(row['source_path'])
-                    job['phase'] = ('核对已校验文件身份：' if proof else '直接移动前完整核对内容：') + PurePosixPath(row['source_path']).name
-                    verified_bytes = job['verification']['checked_bytes']
-                    def reading(amount):
-                        if service.stop_event.is_set():
-                            raise ArchiveError('服务停止，尚未移动素材')
-                        job['verification']['checked_bytes'] += amount
+                with diagnostic_context(source_path=row['source_path'], name=row.get('name'), target_path=row['target_path']):
+                    if service.stop_event.is_set():
+                        raise ArchiveError('服务停止，尚未移动素材')
+                    with subdirectory(sources, str(PurePosixPath(row['source_path']).parent)) as src, subdirectory(targets, str(PurePosixPath(row['target_path']).parent), create=True) as dst:
+                        parent = str(PurePosixPath(row['target_path']).parent)
+                        if confirmed and persistent_identity(dst) != listings[parent][0]:
+                            raise ArchiveError('执行前目标子目录被替换：' + parent)
+                        if mount_id(src) != mount_id(dst):
+                            raise ArchiveError('执行前挂载发生变化，保留来源')
+                        if exists(dst, row['temp']):
+                            raise ArchiveError('直接移动临时文件被占用')
+                        proof = proofs.get(row['source_path'])
+                        job['phase'] = ('核对已校验文件身份：' if proof else '直接移动前完整核对内容：') + PurePosixPath(row['source_path']).name
+                        verified_bytes = job['verification']['checked_bytes']
+                        def reading(amount):
+                            if service.stop_event.is_set():
+                                raise ArchiveError('服务停止，尚未移动素材')
+                            job['verification']['checked_bytes'] += amount
+                            progress()
                         progress()
-                    progress()
-                    sig = _checked(src, PurePosixPath(row['source_path']).name, row, content=True, verified_source=proof, progress=reading)
-                    prior = planned_targets.get(row['target_path'])
-                    target_preexisting = exists(dst, row['target_name'])
-                    target_signature = None
-                    if target_preexisting:
-                        if options_for(request['decisions'])['existing'] != 'skip_identical':
-                            raise ArchiveError('直接移动目标已存在，禁止覆盖：' + row['target_name'])
-                        _, target_signature = require_identical_target(
-                            dst, row, cache=getattr(service, 'target_digests', None))
-                        method = 'skip_identical'
-                    elif prior is not None:
-                        if (prior['blake3'] != row['blake3'] or
-                                prior['size_bytes'] != row['size_bytes']):
-                            raise ArchiveError('直接移动同批目标冲突：' + row['target_name'])
-                        # The first row owns the new target; later rows are
-                        # duplicate sources and are unlinked only after that
-                        # target has been fully verified.
-                        method = 'skip_identical'
-                    else:
-                        method = 'rename'
-                    entry = {'source_path':row['source_path'], 'state':'pending',
-                             'method':method, 'target_digest':row['blake3'],
-                             'target_preexisting':target_preexisting,
-                             'source_signature':sig, 'source_parent':persistent_identity(src),
-                             'target_parent':persistent_identity(dst)}
-                    if target_signature is not None:
-                        entry['target_signature'] = target_signature
-                    entries.append(entry)
-                    planned_targets[row['target_path']] = row
-                    job['verification']['checked_files'] += 1
-                    job['verification']['checked_bytes'] = verified_bytes + row['size_bytes']
-                    job['verification']['reused_files' if proof else 'hashed_files'] += 1
+                        sig = _checked(src, PurePosixPath(row['source_path']).name, row, content=True, verified_source=proof, progress=reading)
+                        prior = planned_targets.get(row['target_path'])
+                        target_preexisting = exists(dst, row['target_name'])
+                        target_signature = None
+                        if target_preexisting:
+                            if options_for(request['decisions'])['existing'] != 'skip_identical':
+                                raise ArchiveError('直接移动目标已存在，禁止覆盖：' + row['target_name'])
+                            _, target_signature = require_identical_target(
+                                dst, row, cache=getattr(service, 'target_digests', None))
+                            method = 'skip_identical'
+                        elif prior is not None:
+                            if (prior['blake3'] != row['blake3'] or
+                                    prior['size_bytes'] != row['size_bytes']):
+                                raise ArchiveError('直接移动同批目标冲突：' + row['target_name'])
+                            # The first row owns the new target; later rows are
+                            # duplicate sources and are unlinked only after that
+                            # target has been fully verified.
+                            method = 'skip_identical'
+                        else:
+                            method = 'rename'
+                        entry = {'source_path':row['source_path'], 'state':'pending',
+                                 'method':method, 'target_digest':row['blake3'],
+                                 'target_preexisting':target_preexisting,
+                                 'source_signature':sig, 'source_parent':persistent_identity(src),
+                                 'target_parent':persistent_identity(dst)}
+                        if target_signature is not None:
+                            entry['target_signature'] = target_signature
+                        entries.append(entry)
+                        planned_targets[row['target_path']] = row
+                        job['verification']['checked_files'] += 1
+                        job['verification']['checked_bytes'] = verified_bytes + row['size_bytes']
+                        job['verification']['reused_files' if proof else 'hashed_files'] += 1
         progress(force=True)
         if _evidence(service, selected) != request['source_evidence']:
             raise ArchiveError('直接移动前成功清单发生变化')
@@ -399,10 +404,11 @@ def _run_locked(service, job, request, sources, targets, requests, receipts):
     # are checked first so same-batch duplicate sources can observe the newly
     # created target during the cleanup barrier.
     for row, entry in zip(rows, journal['files']):
-        if entry.get('method') != 'rename':
-            continue
-        with subdirectory(sources, str(PurePosixPath(row['source_path']).parent)) as src, subdirectory(targets, str(PurePosixPath(row['target_path']).parent)) as dst:
-            check_entry_paths(row, entry, src, dst)
+        with diagnostic_context(unit_id=item_by_source[row['source_path']]['unit']['unit_id'], source_path=row['source_path'], name=row['name'], target_path=row['target_path']):
+            if entry.get('method') != 'rename':
+                continue
+            with subdirectory(sources, str(PurePosixPath(row['source_path']).parent)) as src, subdirectory(targets, str(PurePosixPath(row['target_path']).parent)) as dst:
+                check_entry_paths(row, entry, src, dst)
     journal_io.save()
 
     direct_count = sum(e.get('method') == 'rename' for e in journal['files'])
@@ -411,115 +417,119 @@ def _run_locked(service, job, request, sources, targets, requests, receipts):
     count = sum(e['state'] == 'removed' for e in journal['files'])
     # Move new targets while their sources still have their bound identity.
     for row, entry in zip(rows, journal['files']):
-        if entry['method'] != 'rename' or entry['state'] == 'removed':
-            continue
-        guards(row)
-        with subdirectory(sources, str(PurePosixPath(row['source_path']).parent)) as src, subdirectory(targets, str(PurePosixPath(row['target_path']).parent)) as dst:
-            _parents(src, dst, entry)
-            source_name = PurePosixPath(row['source_path']).name
-            _checked(src, source_name, row, entry['source_signature'])
-            entry['state'] = 'renaming'
-            journal_io.save_entry(entry)  # intent durable BEFORE rename
-            service.checkpoint('direct_move_intent', row)
+        with diagnostic_context(unit_id=item_by_source[row['source_path']]['unit']['unit_id'], source_path=row['source_path'], name=row['name'], target_path=row['target_path']):
+            if entry['method'] != 'rename' or entry['state'] == 'removed':
+                continue
             guards(row)
-            with subdirectory(sources, str(PurePosixPath(row['source_path']).parent)) as fresh_src, subdirectory(targets, str(PurePosixPath(row['target_path']).parent)) as fresh_dst:
-                _parents(fresh_src, fresh_dst, entry)
-                _checked(fresh_src, source_name, row, entry['source_signature'])
-                rename_noreplace(fresh_src, source_name, fresh_dst, row['target_name'])
-                os.fsync(fresh_src); os.fsync(fresh_dst)
-                service.checkpoint('direct_move_renamed', row)
-                with subdirectory(sources, str(PurePosixPath(row['source_path']).parent)) as final_src, subdirectory(targets, str(PurePosixPath(row['target_path']).parent)) as final_dst:
-                    _parents(final_src, final_dst, entry)
-                    if exists(final_src, source_name):
-                        raise ArchiveError('移动后来源重新出现，保留供核对')
-                    entry['target_signature'] = _checked(final_dst, row['target_name'], row, entry['source_signature'], moved=True)
-            entry['state'] = 'removed'
-            journal_io.save_entry(entry)
-            count += 1
-        moved_count += 1
-        job['summary'].update(direct_moved_files=moved_count, skipped_files=skipped_count,
-                              removed_sources=count)
-        job['phase'] = '已直接移动：' + str(count) + '/' + str(len(rows))
-        progress()
+            with subdirectory(sources, str(PurePosixPath(row['source_path']).parent)) as src, subdirectory(targets, str(PurePosixPath(row['target_path']).parent)) as dst:
+                _parents(src, dst, entry)
+                source_name = PurePosixPath(row['source_path']).name
+                _checked(src, source_name, row, entry['source_signature'])
+                entry['state'] = 'renaming'
+                journal_io.save_entry(entry)  # intent durable BEFORE rename
+                service.checkpoint('direct_move_intent', row)
+                guards(row)
+                with subdirectory(sources, str(PurePosixPath(row['source_path']).parent)) as fresh_src, subdirectory(targets, str(PurePosixPath(row['target_path']).parent)) as fresh_dst:
+                    _parents(fresh_src, fresh_dst, entry)
+                    _checked(fresh_src, source_name, row, entry['source_signature'])
+                    rename_noreplace(fresh_src, source_name, fresh_dst, row['target_name'])
+                    os.fsync(fresh_src); os.fsync(fresh_dst)
+                    service.checkpoint('direct_move_renamed', row)
+                    with subdirectory(sources, str(PurePosixPath(row['source_path']).parent)) as final_src, subdirectory(targets, str(PurePosixPath(row['target_path']).parent)) as final_dst:
+                        _parents(final_src, final_dst, entry)
+                        if exists(final_src, source_name):
+                            raise ArchiveError('移动后来源重新出现，保留供核对')
+                        entry['target_signature'] = _checked(final_dst, row['target_name'], row, entry['source_signature'], moved=True)
+                entry['state'] = 'removed'
+                journal_io.save_entry(entry)
+                count += 1
+            moved_count += 1
+            job['summary'].update(direct_moved_files=moved_count, skipped_files=skipped_count,
+                                  removed_sources=count)
+            job['phase'] = '已直接移动：' + str(count) + '/' + str(len(rows))
+            progress()
 
     # Barrier: every target, including existing identical targets and targets
     # created by the rename phase, must be verified before any duplicate
     # source is unlinked.
     for row, entry in zip(rows, journal['files']):
-        with subdirectory(sources, str(PurePosixPath(row['source_path']).parent)) as src, subdirectory(targets, str(PurePosixPath(row['target_path']).parent)) as dst:
-            _parents(src, dst, entry)
-            target_readback(dst, row, entry)
-            if entry['method'] == 'skip_identical' and entry['state'] != 'removed':
-                source_name = PurePosixPath(row['source_path']).name
-                if not exists(src, source_name):
-                    if entry['state'] == 'pending':
-                        raise ArchiveError('尚未开始清理的重复来源缺失')
-                    # The source may have been unlinked before a crash, with
-                    # the durable removed transition still pending.
-                    entry['state'] = 'removed'
-                else:
-                    _checked(src, source_name, row, entry['source_signature'], content=recovering)
-            if entry['state'] != 'pending':
-                journal_io.save_entry(entry)
+        with diagnostic_context(unit_id=item_by_source[row['source_path']]['unit']['unit_id'], source_path=row['source_path'], name=row['name'], target_path=row['target_path']):
+            with subdirectory(sources, str(PurePosixPath(row['source_path']).parent)) as src, subdirectory(targets, str(PurePosixPath(row['target_path']).parent)) as dst:
+                _parents(src, dst, entry)
+                target_readback(dst, row, entry)
+                if entry['method'] == 'skip_identical' and entry['state'] != 'removed':
+                    source_name = PurePosixPath(row['source_path']).name
+                    if not exists(src, source_name):
+                        if entry['state'] == 'pending':
+                            raise ArchiveError('尚未开始清理的重复来源缺失')
+                        # The source may have been unlinked before a crash, with
+                        # the durable removed transition still pending.
+                        entry['state'] = 'removed'
+                    else:
+                        _checked(src, source_name, row, entry['source_signature'], content=recovering)
+                if entry['state'] != 'pending':
+                    journal_io.save_entry(entry)
     journal_io.save()
 
     # All destinations are ready. The unlink intent uses the same durable
     # ``renaming`` state; method distinguishes it from an interrupted rename.
     for row, entry in zip(rows, journal['files']):
-        if entry['method'] != 'skip_identical' or entry['state'] == 'removed':
-            continue
-        guards(row)
-        with subdirectory(sources, str(PurePosixPath(row['source_path']).parent)) as src, subdirectory(targets, str(PurePosixPath(row['target_path']).parent)) as dst:
-            _parents(src, dst, entry)
-            source_name = PurePosixPath(row['source_path']).name
-            if not exists(src, source_name):
-                if entry['state'] == 'pending':
-                    raise ArchiveError('尚未开始清理的重复来源缺失')
+        with diagnostic_context(unit_id=item_by_source[row['source_path']]['unit']['unit_id'], source_path=row['source_path'], name=row['name'], target_path=row['target_path']):
+            if entry['method'] != 'skip_identical' or entry['state'] == 'removed':
+                continue
+            guards(row)
+            with subdirectory(sources, str(PurePosixPath(row['source_path']).parent)) as src, subdirectory(targets, str(PurePosixPath(row['target_path']).parent)) as dst:
+                _parents(src, dst, entry)
+                source_name = PurePosixPath(row['source_path']).name
+                if not exists(src, source_name):
+                    if entry['state'] == 'pending':
+                        raise ArchiveError('尚未开始清理的重复来源缺失')
+                    entry['state'] = 'removed'
+                    journal_io.save_entry(entry)
+                    count += 1
+                    continue
+                entry['state'] = 'renaming'
+                journal_io.save_entry(entry)
+                service.checkpoint('direct_move_intent', row)
+                guards(row)
+                # Reopen both path parents after the durable intent. Held FDs do
+                # not prove that the reviewed directory names still point to the
+                # same objects.
+                with subdirectory(sources, str(PurePosixPath(row['source_path']).parent)) as fresh_src, subdirectory(targets, str(PurePosixPath(row['target_path']).parent)) as fresh_dst:
+                    _parents(fresh_src, fresh_dst, entry)
+                    target_readback(fresh_dst, row, entry)
+                    _checked(fresh_src, source_name, row, entry['source_signature'])
+                    os.unlink(source_name, dir_fd=fresh_src)
+                    os.fsync(fresh_src)
+                service.checkpoint('direct_move_removed', row)
                 entry['state'] = 'removed'
                 journal_io.save_entry(entry)
                 count += 1
-                continue
-            entry['state'] = 'renaming'
-            journal_io.save_entry(entry)
-            service.checkpoint('direct_move_intent', row)
-            guards(row)
-            # Reopen both path parents after the durable intent. Held FDs do
-            # not prove that the reviewed directory names still point to the
-            # same objects.
-            with subdirectory(sources, str(PurePosixPath(row['source_path']).parent)) as fresh_src, subdirectory(targets, str(PurePosixPath(row['target_path']).parent)) as fresh_dst:
-                _parents(fresh_src, fresh_dst, entry)
-                target_readback(fresh_dst, row, entry)
-                _checked(fresh_src, source_name, row, entry['source_signature'])
-                os.unlink(source_name, dir_fd=fresh_src)
-                os.fsync(fresh_src)
-            service.checkpoint('direct_move_removed', row)
-            entry['state'] = 'removed'
-            journal_io.save_entry(entry)
-            count += 1
-        job['summary'].update(direct_moved_files=moved_count, skipped_files=skipped_count,
-                              removed_sources=count)
-        job['phase'] = '已直接移动：' + str(count) + '/' + str(len(rows))
-        progress()
+            job['summary'].update(direct_moved_files=moved_count, skipped_files=skipped_count,
+                                  removed_sources=count)
+            job['phase'] = '已直接移动：' + str(count) + '/' + str(len(rows))
+            progress()
     progress(force=True)
     guards()
     # Final metadata/identity readback (the same inode, not a newly written copy).
     final_rows = []
     for row, entry in zip(rows, journal['files']):
-        with subdirectory(sources, str(PurePosixPath(row['source_path']).parent)) as src, subdirectory(targets, str(PurePosixPath(row['target_path']).parent)) as dst:
-            _parents(src, dst, entry)
-            if exists(src, PurePosixPath(row['source_path']).name):
-                raise ArchiveError('直接移动来源重新出现')
-            target_sig = checked_target(dst, row, entry['target_signature'])
-            if not entry.get('target_preexisting') and target_sig != entry['target_signature']:
-                entry['target_signature'] = target_sig
-                journal_io.save_entry(entry)
-            final = {**row, 'source_signature':entry['source_signature'],
-                     'target_signature':target_sig, 'published':True,
-                     'transfer_method':('skip_identical' if entry['method'] == 'skip_identical'
-                                        else 'same_volume_rename')}
-            if entry['method'] == 'skip_identical':
-                final['identical_target_blake3'] = row['blake3']
-            final_rows.append(final)
+        with diagnostic_context(unit_id=item_by_source[row['source_path']]['unit']['unit_id'], source_path=row['source_path'], name=row['name'], target_path=row['target_path']):
+            with subdirectory(sources, str(PurePosixPath(row['source_path']).parent)) as src, subdirectory(targets, str(PurePosixPath(row['target_path']).parent)) as dst:
+                _parents(src, dst, entry)
+                if exists(src, PurePosixPath(row['source_path']).name):
+                    raise ArchiveError('直接移动来源重新出现')
+                target_sig = checked_target(dst, row, entry['target_signature'])
+                if not entry.get('target_preexisting') and target_sig != entry['target_signature']:
+                    entry['target_signature'] = target_sig
+                    journal_io.save_entry(entry)
+                final = {**row, 'source_signature':entry['source_signature'],
+                         'target_signature':target_sig, 'published':True,
+                         'transfer_method':('skip_identical' if entry['method'] == 'skip_identical'
+                                            else 'same_volume_rename')}
+                if entry['method'] == 'skip_identical':
+                    final['identical_target_blake3'] = row['blake3']
+                final_rows.append(final)
     journal['completed_at'] = now()
     journal_io.save()
     # Publish the established MOVE history contract only after all files verify.
@@ -572,7 +582,7 @@ def _run_locked(service, job, request, sources, targets, requests, receipts):
                           direct_moved_files=moved_count, copy_files=0, skipped_files=skipped_count,
                           removed_sources=len(rows))
     job.update(status='completed', phase='同卷直接移动完成，文件身份与来源移出已核对',
-               cleanup_started=True, direct_move_recovery_required=False, completed_at=now(), outcomes=outcomes, errors=[])
+               cleanup_started=True, direct_move_recovery_required=False, completed_at=now(), outcomes=outcomes, errors=[],issues=[])
     service._save(job)
     return job
 

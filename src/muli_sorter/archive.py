@@ -5,6 +5,7 @@ import os
 import re
 from pathlib import Path, PurePosixPath
 import unicodedata
+from .archive_diagnostics import diagnostic_context
 from .archive_copy import stage_file, verify_final
 from .archive_targets import same_content
 from .archive_fixture import MARKER
@@ -70,11 +71,12 @@ def _unit(root, source_fd, projects_fd, state_fd, model, decision, unit, project
     job = record(state_fd, filename)
     if job is None:
         for row in identity['files']:
-            with subdirectory(projects_fd,str(PurePosixPath(row['target_path']).parent),create=True) as dest:
-                if exists(dest,row['temp']):
-                    raise ArchiveError('目标或临时文件已经存在且不属于已登记任务，禁止覆盖')
-                if exists(dest,row['target_name']) and not (skip_identical and same_content(dest,row['target_name'],row)):
-                    raise ArchiveError('目标已存在且内容不一致，禁止覆盖')
+            with diagnostic_context(unit_id=unit['unit_id'], source_path=row['source_path'], name=row.get('name'), target_path=row['target_path']):
+                with subdirectory(projects_fd,str(PurePosixPath(row['target_path']).parent),create=True) as dest:
+                    if exists(dest,row['temp']):
+                        raise ArchiveError('目标或临时文件已经存在且不属于已登记任务，禁止覆盖')
+                    if exists(dest,row['target_name']) and not (skip_identical and same_content(dest,row['target_name'],row)):
+                        raise ArchiveError('目标已存在且内容不一致，禁止覆盖')
         # Reserve the ownership before writing the intent. A crash after this
         # point is recoverable from the small pending journal and cannot be
         # mistaken for an unowned unit on the next submission.
@@ -150,50 +152,53 @@ def _unit(root, source_fd, projects_fd, state_fd, model, decision, unit, project
         persist()
         # All companion files are staged and verified before the first publication.
         for row in rows:
-            stack, src, dst = parents(row)
-            with stack:
-                if exists(dst,row['target_name']):
-                    finalize_existing(row,src,dst)
-                    stats['reused_files'] += 1
-                    stats['skipped_files'] += 1
-                elif row.get('published'):
-                    raise ArchiveError('先前已发布文件缺失，停止自动重建')
-                else:
-                    free = os.fstatvfs(dst)
-                    if free.f_bavail * free.f_frsize < row['size_bytes']:
-                        raise ArchiveError('目标可用空间不足')
-                    def progress(key,size):
-                        stats[key] += size
-                    stage_file(src,PurePosixPath(row['source_path']).name,dst,row,persist,checkpoint,chunk_size,progress=progress)
+            with diagnostic_context(unit_id=unit['unit_id'], source_path=row['source_path'], name=row.get('name'), target_path=row['target_path']):
+                stack, src, dst = parents(row)
+                with stack:
+                    if exists(dst,row['target_name']):
+                        finalize_existing(row,src,dst)
+                        stats['reused_files'] += 1
+                        stats['skipped_files'] += 1
+                    elif row.get('published'):
+                        raise ArchiveError('先前已发布文件缺失，停止自动重建')
+                    else:
+                        free = os.fstatvfs(dst)
+                        if free.f_bavail * free.f_frsize < row['size_bytes']:
+                            raise ArchiveError('目标可用空间不足')
+                        def progress(key,size):
+                            stats[key] += size
+                        stage_file(src,PurePosixPath(row['source_path']).name,dst,row,persist,checkpoint,chunk_size,progress=progress)
         checkpoint('unit_staged',job)
         for row in rows:
-            if verify(unit) != evidence:
-                raise ArchiveError('执行期间成功清单发生变化')
-            stack, src, dst = parents(row)
-            with stack:
-                if not exists(dst,row['target_name']):
-                    temp = open_file(dst,row['temp'])
-                    source = open_file(src,PurePosixPath(row['source_path']).name)
-                    try:
-                        if signature(temp)[:2] != row.get('temp_identity') or os.fstat(temp).st_size != row['size_bytes'] or signature(source) != row.get('source_signature') or hash_fd(source) != row['blake3']:
-                            raise ArchiveError('发布前内容证据不一致')
-                        verified_target_hash(temp, row['blake3'])
-                        if signature(source) != row.get('source_signature'):
-                            raise ArchiveError('发布前内容证据不一致')
-                    finally:
-                        os.close(temp)
-                        os.close(source)
-                    # Link is only a no-overwrite publish of the NEW copy, never the source.
-                    os.link(row['temp'],row['target_name'],src_dir_fd=dst,dst_dir_fd=dst,follow_symlinks=False)
-                    os.fsync(dst)
-                    checkpoint('published',row)
-                finalize_existing(row,src,dst)
+            with diagnostic_context(unit_id=unit['unit_id'], source_path=row['source_path'], name=row.get('name'), target_path=row['target_path']):
+                if verify(unit) != evidence:
+                    raise ArchiveError('执行期间成功清单发生变化')
+                stack, src, dst = parents(row)
+                with stack:
+                    if not exists(dst,row['target_name']):
+                        temp = open_file(dst,row['temp'])
+                        source = open_file(src,PurePosixPath(row['source_path']).name)
+                        try:
+                            if signature(temp)[:2] != row.get('temp_identity') or os.fstat(temp).st_size != row['size_bytes'] or signature(source) != row.get('source_signature') or hash_fd(source) != row['blake3']:
+                                raise ArchiveError('发布前内容证据不一致')
+                            verified_target_hash(temp, row['blake3'])
+                            if signature(source) != row.get('source_signature'):
+                                raise ArchiveError('发布前内容证据不一致')
+                        finally:
+                            os.close(temp)
+                            os.close(source)
+                        # Link is only a no-overwrite publish of the NEW copy, never the source.
+                        os.link(row['temp'],row['target_name'],src_dir_fd=dst,dst_dir_fd=dst,follow_symlinks=False)
+                        os.fsync(dst)
+                        checkpoint('published',row)
+                    finalize_existing(row,src,dst)
         if verify(unit) != evidence:
             raise ArchiveError('生成回执前来源清单发生变化')
         for row in rows:
-            stack, src, dst = parents(row)
-            with stack:
-                verify_final(src,PurePosixPath(row['source_path']).name,dst,row)
+            with diagnostic_context(unit_id=unit['unit_id'], source_path=row['source_path'], name=row.get('name'), target_path=row['target_path']):
+                stack, src, dst = parents(row)
+                with stack:
+                    verify_final(src,PurePosixPath(row['source_path']).name,dst,row)
         receipt = {'schema_version':'archive/0.4' if production else 'synthetic-archive/0.3',
                    'example_data':not production,'real_media_write_authorized':production,
                    'job_id':jid,'unit_id':unit['unit_id'],'project':project,'report_id':model['report_id'],'decision_id':digest(decision),

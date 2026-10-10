@@ -1,5 +1,6 @@
 """Revalidate completion evidence with separate synthetic and production gates."""
 import os
+from .archive_diagnostics import diagnostic_context
 from .archive_io import ArchiveError, signature
 from .intake import _open, relative, resolve_files, runtime_check, validate_record, media_stat
 from .postcopy_receipt import PostcopyError, _candidate_signature as candidate_signature
@@ -147,50 +148,51 @@ def verify_sources(staging, unit, runtime_provider, *, production=False, reviewe
             known[f['resolved_path']] = f
             source_records[f['resolved_path']] = records[provenance['batch_id']]
     for item in unit['files']:
-        relative(item['source_path'])
-        relative(item['name'])
-        if type(item['size_bytes']) is not int or item['size_bytes'] <= 0:
-            raise ArchiveError('空文件或无效长度不能归档')
-        f = known.get(item['source_path'])
-        if f is None or (f['size_bytes'], f['hash']['source'], f['relative_path']) != (item['size_bytes'], item['blake3'], item['name']):
-            raise ArchiveError('确认模型文件与原始成功清单不符')
-        if check_media:
-            media_stat(staging, item['source_path'], item['size_bytes'])
-            postcopy = source_records[item['source_path']].get('_postcopy_evidence')
-            if postcopy is not None:
-                receipt_file = postcopy['files'].get(item['source_path'])
-                if receipt_file is None:
-                    raise ArchiveError('独立校验回执遗漏所选来源文件')
-                fd = _open(staging, item['source_path'])
-                try:
-                    from .postcopy_receipt import source_signature
-                    receipt_actual = source_signature(fd, postcopy['schema'])
-                    current = os.fstat(fd)
-                    actual = {'dev': current.st_dev, 'ino': current.st_ino,
-                              'size': current.st_size, 'mtime_ns': current.st_mtime_ns,
-                              'ctime_ns': current.st_ctime_ns}
-                    if (source_signature(fd, postcopy['schema']) != receipt_actual or
-                            any(actual[k] != receipt_actual[k] for k in ('ino', 'size', 'mtime_ns', 'ctime_ns'))):
-                        raise ArchiveError('核对期间来源文件身份发生变化')
-                    if receipt_actual != receipt_file['source_signature']:
-                        expected = receipt_file['source_signature']
-                        legacy_remount = postcopy['schema'] == 'postcopy-verification/1' and (
-                            {k:v for k,v in receipt_actual.items() if k != 'dev'} ==
-                            {k:v for k,v in expected.items() if k != 'dev'})
-                        if legacy_remount:
-                            raise ArchiveError('NAS 重启后旧校验回执的磁盘编号改变；需完成一次独立续验，请勿重复提交归档')
-                        if not _attributes_touched_only(receipt_actual, expected):
-                            raise ArchiveError('所选来源文件与独立校验回执签名不一致，请核对文件是否变化')
-                        # Attributes were rewritten without touching the bytes.
-                        # Prove the content here instead of demanding a new
-                        # independent verification for an attribute-only edit.
-                        from .archive_io import hash_fd
-                        if hash_fd(fd) != item['blake3']:
-                            raise ArchiveError('来源文件属性变化且内容摘要与回执签名不一致，请重新核对来源')
-                finally:
-                    os.close(fd)
-                if validated_signatures is not None:
-                    validated_signatures[item['source_path']] = dict(actual)
+        with diagnostic_context(unit_id=unit['unit_id'], source_path=item['source_path'], name=item['name']):
+            relative(item['source_path'])
+            relative(item['name'])
+            if type(item['size_bytes']) is not int or item['size_bytes'] <= 0:
+                raise ArchiveError('空文件或无效长度不能归档')
+            f = known.get(item['source_path'])
+            if f is None or (f['size_bytes'], f['hash']['source'], f['relative_path']) != (item['size_bytes'], item['blake3'], item['name']):
+                raise ArchiveError('确认模型文件与原始成功清单不符')
+            if check_media:
+                media_stat(staging, item['source_path'], item['size_bytes'])
+                postcopy = source_records[item['source_path']].get('_postcopy_evidence')
+                if postcopy is not None:
+                    receipt_file = postcopy['files'].get(item['source_path'])
+                    if receipt_file is None:
+                        raise ArchiveError('独立校验回执遗漏所选来源文件')
+                    fd = _open(staging, item['source_path'])
+                    try:
+                        from .postcopy_receipt import source_signature
+                        receipt_actual = source_signature(fd, postcopy['schema'])
+                        current = os.fstat(fd)
+                        actual = {'dev': current.st_dev, 'ino': current.st_ino,
+                                  'size': current.st_size, 'mtime_ns': current.st_mtime_ns,
+                                  'ctime_ns': current.st_ctime_ns}
+                        if (source_signature(fd, postcopy['schema']) != receipt_actual or
+                                any(actual[k] != receipt_actual[k] for k in ('ino', 'size', 'mtime_ns', 'ctime_ns'))):
+                            raise ArchiveError('核对期间来源文件身份发生变化')
+                        if receipt_actual != receipt_file['source_signature']:
+                            expected = receipt_file['source_signature']
+                            legacy_remount = postcopy['schema'] == 'postcopy-verification/1' and (
+                                {k:v for k,v in receipt_actual.items() if k != 'dev'} ==
+                                {k:v for k,v in expected.items() if k != 'dev'})
+                            if legacy_remount:
+                                raise ArchiveError('NAS 重启后旧校验回执的磁盘编号改变；需完成一次独立续验，请勿重复提交归档')
+                            if not _attributes_touched_only(receipt_actual, expected):
+                                raise ArchiveError('所选来源文件与独立校验回执签名不一致，请核对文件是否变化')
+                            # Attributes were rewritten without touching the bytes.
+                            # Prove the content here instead of demanding a new
+                            # independent verification for an attribute-only edit.
+                            from .archive_io import hash_fd
+                            if hash_fd(fd) != item['blake3']:
+                                raise ArchiveError('来源文件属性变化且内容摘要与回执签名不一致，请重新核对来源')
+                    finally:
+                        os.close(fd)
+                    if validated_signatures is not None:
+                        validated_signatures[item['source_path']] = dict(actual)
     fresh_groups = group_files(list(known.values()), [], [], 'archive-validation')
     fresh_units = [u for group in fresh_groups for u in group['units']]
     if any(any(u.get(field) != unit.get(field) for field in ('capture_time','capture_date','timezone_trusted','device')) for u in fresh_units):

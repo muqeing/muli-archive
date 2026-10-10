@@ -3,6 +3,7 @@ from copy import deepcopy
 import threading
 import time
 from .archive_io import ArchiveError
+from .archive_diagnostics import diagnostic_issues
 from .order_feed_io import atomic_json, read_json, digest
 
 
@@ -40,7 +41,7 @@ class Submissions:
                         return {'submission_id':token, 'status':'accepted', 'job_id':job['job_id']}
                 return {'submission_id':token, 'status':'unknown',
                         'error':'上次提交被中断，尚不能确认结果；不会自动重放，请保留此页面并核对任务。'}
-            result = {k:v for k,v in row.items() if k in ('submission_id','status','job_id','error','created_at')}
+            result = {k:v for k,v in row.items() if k in ('submission_id','status','job_id','error','issues','created_at')}
             progress = self.progress.get(token)
             if progress is not None:
                 result['progress'] = dict(progress, elapsed_seconds=round(time.time()-row['created_at'], 1))
@@ -87,7 +88,9 @@ class Submissions:
             # Errors can occur after a request/reservation write. Preserve an
             # ambiguous state rather than inviting another business submission.
             request = self.jobs.state/'requests'/('request-'+row['expected_job_id']+'.json')
-            result = dict(row, status='unknown' if request.exists() else 'rejected', error=str(exc)[:500])
+            ticket = self.jobs.previews.get(token) or {}
+            result = dict(row, status='unknown' if request.exists() else 'rejected', error=str(exc)[:500],
+                          issues=diagnostic_issues(exc, ticket.get('model'), ticket.get('scoped_decisions', decisions)))
         with self.lock:
             try:
                 atomic_json(self.path(token), result)

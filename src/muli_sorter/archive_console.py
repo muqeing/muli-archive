@@ -22,6 +22,7 @@ from .archive_fixture import MARKER
 from .archive_io import ArchiveError, atomic_json
 from .archive_jobs import ArchiveJobs, JOB_ID
 from .archive_submission import Submissions
+from .archive_diagnostics import diagnostic_issues
 from .queue_model_cache import QueueModelCache
 from .intake import read_bytes
 from .order_feed_io import read_json
@@ -82,10 +83,12 @@ def accepts_gzip(value):
 def job_summary(job):
     """Browser task list projection; full job/receipts remain available unchanged."""
     fields = ('job_id', 'status', 'summary', 'archive_options', 'projects', 'phase',
-              'current_file_bytes', 'execution_strategy', 'direct_move_recovery_required', 'completed_at', 'finished_at', 'completedAt', 'verification')
+              'current_file_bytes', 'issues', 'execution_strategy', 'direct_move_recovery_required', 'completed_at', 'finished_at', 'completedAt', 'verification')
     result = {key: job[key] for key in fields if key in job}
     result['errors'] = list(job.get('errors') or []) + [
         row['error'] for row in job.get('outcomes', []) if row.get('error')]
+    result['issues'] = list(job.get('issues') or []) + [
+        issue for row in job.get('outcomes', []) for issue in row.get('issues', [])]
     return result
 
 
@@ -399,6 +402,7 @@ def make_server(jobs, queue, *, host='127.0.0.1', port=0, public_origin=None, al
             if not self.allowed(write=True):
                 return
             route=urlsplit(self.path).path
+            body = None
             try:
                 if self.headers.get('Content-Type','').split(';')[0] != 'application/json' or self.headers.get('Transfer-Encoding'):
                     raise ValueError('请求格式不支持')
@@ -439,7 +443,14 @@ def make_server(jobs, queue, *, host='127.0.0.1', port=0, public_origin=None, al
                     return self.reply(202,result)
                 self.reply(404,{'error':'提交入口或字段不符'})
             except (ValueError,KeyError,TypeError,OSError,sqlite3.DatabaseError) as exc:
-                self.reply(409,{'error':str(exc)})
+                result = {'error':str(exc)}
+                if isinstance(body, dict) and route in ('/api/submit', '/api/submissions'):
+                    token = body.get('preview_id')
+                    ticket = jobs.previews.get(token) if isinstance(token, str) else None
+                    ticket = ticket or {}
+                    result['issues'] = diagnostic_issues(exc, ticket.get('model'),
+                        ticket.get('scoped_decisions', body.get('decisions')))
+                self.reply(409,result)
     class ReviewServer(ThreadingHTTPServer):
         def server_close(self):
             submissions.close()

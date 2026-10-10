@@ -382,13 +382,60 @@
       refreshFeedbackTimer = null;
     }, 1000);
   }
-  function setErrors(errors) {
+  function appendIssues(node, issues) {
+    (Array.isArray(issues) ? issues : []).forEach(function (issue) {
+      if (!issue || typeof issue !== "object") return;
+      var box = make("div", "panel archive-issue");
+      var scopes = { file: "文件检查失败", unit: "素材检查失败", segment: "拍摄段检查失败", project: "项目检查失败", plan: "整份计划检查未通过" };
+      box.appendChild(make("strong", "", scopes[issue.scope] || "归档检查未通过"));
+      box.appendChild(make("p", "warning", String(issue.reason || "原因尚未明确")));
+      (Array.isArray(issue.segments) ? issue.segments : []).forEach(function (segment) {
+        var line = make("p", "", "拍摄段：" + String(segment.label || "未命名拍摄段") + " · 编号：" + String(segment.segment_id || "未提供"));
+        var card = Array.prototype.find.call(document.querySelectorAll("[data-segment-id]"), function (element) {
+          return element.getAttribute("data-segment-id") === segment.segment_id;
+        });
+        if (card) {
+          var locate = make("button", "secondary", "定位拍摄段"); locate.type = "button";
+          locate.addEventListener("click", function () { card.scrollIntoView({ behavior: "smooth", block: "center" }); });
+          line.appendChild(locate);
+        } else line.appendChild(make("span", "muted", "（当前页面未显示此段）"));
+        box.appendChild(line);
+      });
+      (Array.isArray(issue.units) ? issue.units : []).forEach(function (unit) {
+        box.appendChild(make("p", "", "素材：" + String(unit.unit_id || "未提供") + " · 拍摄时间：" + String(unit.capture_time || unit.capture_date || "未知")));
+      });
+      var files = Array.isArray(issue.files) ? issue.files : [];
+      if (files.length) {
+        var details = make("details", ""); details.open = files.length <= 3;
+        details.appendChild(make("summary", "", "对应文件 · " + files.length + " 个"));
+        files.forEach(function (file) {
+          details.appendChild(make("p", "", String(file.name || "未提供文件名") + " · 来源：" + String(file.source_path || "未提供路径")));
+        });
+        box.appendChild(details);
+      }
+      if (issue.target_path) box.appendChild(make("p", "", "目标：" + String(issue.target_path)));
+      if (issue.report_id || issue.current_report_id) {
+        var versions = make("details", "");
+        versions.appendChild(make("summary", "", "查看页面与后台的清单编号"));
+        versions.appendChild(make("p", "", "页面：" + String(issue.report_id || "未提供")));
+        versions.appendChild(make("p", "", "后台：" + String(issue.current_report_id || "未提供")));
+        box.appendChild(versions);
+      }
+      if (issue.guidance) box.appendChild(make("p", "muted", String(issue.guidance)));
+      node.appendChild(box);
+    });
+  }
+  function setErrors(errors, issues) {
     var node = byId("archive-submit-errors");
     if (!node) return;
     clear(node);
     var items = Array.isArray(errors) ? errors : [];
-    items.forEach(function (error) { node.appendChild(make("p", "warning", String(error))); });
-    node.hidden = !items.length;
+    var details = Array.isArray(issues) ? issues : [];
+    items.forEach(function (error) {
+      if (!details.some(function (issue) { return issue && issue.reason === String(error); })) node.appendChild(make("p", "warning", String(error)));
+    });
+    appendIssues(node, details);
+    node.hidden = !items.length && !details.length;
   }
   function unitFiles(unit) {
     var count = Number(unit && unit.file_count);
@@ -496,9 +543,12 @@
       var jobErrors = [];
       (Array.isArray(job.errors) ? job.errors : []).forEach(function (error) { jobErrors.push(String(error)); });
       (Array.isArray(job.outcomes) ? job.outcomes : []).forEach(function (outcome) { if (outcome && outcome.error) jobErrors.push(String(outcome.error)); });
-      if (jobErrors.length) {
+      if (jobErrors.length || (Array.isArray(job.issues) && job.issues.length)) {
         var reasons = make("div", "warning-box");
-        jobErrors.forEach(function (error) { reasons.appendChild(make("p", "warning", error)); });
+        jobErrors.forEach(function (error) {
+          if (!(job.issues || []).some(function (issue) { return issue && issue.reason === error; })) reasons.appendChild(make("p", "warning", error));
+        });
+        appendIssues(reasons, job.issues);
         body.appendChild(reasons);
       }
       item.appendChild(body);
@@ -669,6 +719,7 @@
     if (!response.ok) {
       var failure = new Error(readableError ? String(readableError) : "HTTP " + response.status);
       failure.status = response.status;
+      failure.issues = Array.isArray(data && data.issues) ? data.issues : [];
       throw failure;
     }
     return data || {};
@@ -762,7 +813,7 @@
     preflightPollFailed = false;
     setPreflightRetryVisible(false);
     var responseErrors = Array.isArray(data && data.errors) ? data.errors : [];
-    setErrors(responseErrors);
+    setErrors(responseErrors, data && data.issues);
     renderProjects(data && data.projects);
     renderFileActions(data && data.file_actions);
     var summary = data && data.summary || {};
@@ -909,7 +960,7 @@
       preflightPollFailed = true;
       preflightNeedsRestart = true;
       ready = null;
-      setErrors([preflightErrorText(error)]);
+      setErrors([preflightErrorText(error)], error && error.issues);
       setPreflightRetryVisible(true);
       setStatus(preflightErrorText(error) + " 可点击“重新检查”重新发起检查。", "error");
       writeRecoveryState();
@@ -1012,7 +1063,7 @@
     confirmationRecoveryManualRequired = false;
     preflightNeedsRestart = true;
     writeRecoveryState();
-    setErrors([submissionResultText(data)]);
+    setErrors([submissionResultText(data)], data && data.issues);
     setStatus("提交未执行，请核对当前计划后手动重新检查。", "error");
     setPreflightRetryVisible(true);
     updateSubmitButton();
@@ -1095,6 +1146,7 @@
       handleSubmissionResult(data, submissionRevision, submissionPlan);
     } catch (error) {
       if (error && error.status === 409) {
+        setErrors([String(error.message || "提交请求未确认")], error.issues);
         setStatus("提交请求未确认，正在读取已有提交记录…", "");
         await refreshSubmissionRecovery();
       } else unknownSubmission({ status: "unknown", error: "提交结果暂不明确" });
@@ -1123,7 +1175,7 @@
               var summary = data.summary || {};
               setStatus("归档任务已结束：" + statusText(data.status, data) + "。已完成 " + finiteNumber(summary.completed_files) + " / " + finiteNumber(summary.total_files) + " 个文件；请查看下方原因，并在最近归档任务中处理。", data.status === "failed" ? "error" : "");
               var errors = Array.isArray(data.errors) ? data.errors.filter(function (error) { return typeof error === "string" && error; }).slice(0, 5) : [];
-              setErrors(errors.length ? errors : ["未返回具体原因，请查看最近归档任务的详细记录。"]);
+              setErrors(errors.length ? errors : ["未返回具体原因，请查看最近归档任务的详细记录。"], data.issues);
             }
           }
         }

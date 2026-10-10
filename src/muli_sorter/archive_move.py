@@ -6,6 +6,7 @@ when the process exits after unlink but before saving its result.
 """
 import os
 from pathlib import PurePosixPath
+from .archive_diagnostics import diagnostic_context
 from .archive_io import ArchiveError, atomic_json, directory, hash_fd, open_file, signature, subdirectory, persistent_identity, verified_target_hash
 from .archive_options import options_for
 from .archive_source import verify_sources
@@ -128,10 +129,11 @@ def _finish_move_locked(service, job, request, batch_ids=None):
             if uid not in units or len(receipt['files'])!=len(units[uid]['files']):
                 raise ArchiveError('归档回执不属于本次素材')
             for row in receipt['files']:
-                expected = request['file_plans'].get(row['source_path'])
-                if not expected or any(row.get(k)!=v for k,v in expected.items()):
-                    raise ArchiveError('移动文件与已提交目标计划不一致')
-                rows.append(row)
+                with diagnostic_context(source_path=row['source_path'], name=row.get('name'), target_path=row['target_path']):
+                    expected = request['file_plans'].get(row['source_path'])
+                    if not expected or any(row.get(k)!=v for k,v in expected.items()):
+                        raise ArchiveError('移动文件与已提交目标计划不一致')
+                    rows.append(row)
             evidence[uid] = receipt['source_evidence']
     if set(r['source_path'] for r in rows) != set(request['file_plans']):
         raise ArchiveError('移动清理范围未闭合')
@@ -212,44 +214,46 @@ def _finish_move_locked(service, job, request, batch_ids=None):
                         os.close(handle)
         # Verify all companions and all units before removing the first source.
         for row in rows:
-            target_check(row)
+            with diagnostic_context(source_path=row['source_path'], name=row.get('name'), target_path=row['target_path']):
+                target_check(row)
         for row, entry in zip(rows,journal['files']):
-            if entry['source_path']!=row['source_path'] or entry['state'] not in ('pending','removing','removed'):
-                raise ArchiveError('移动清理状态记录无效')
-            if service.stop_event.is_set():
-                raise ArchiveError('服务停止，移动进度已保留')
-            service._check_roots()
-            target_check(row)
-            with subdirectory(sources,str(PurePosixPath(row['source_path']).parent)) as src:
-                source_name = PurePosixPath(row['source_path']).name
-                parent_id = persistent_identity(src)
-                if entry.get('parent_identity') and entry['parent_identity']!=parent_id:
-                    raise ArchiveError('中转源目录身份发生变化')
-                try:
-                    checked(src,source_name,row,row['source_signature'])
-                except FileNotFoundError:
-                    if entry['state'] not in ('removing','removed'):
-                        raise ArchiveError('未开始移动的源文件已缺失，需核对：'+source_name)
-                else:
-                    if entry['state']=='removed':
-                        raise ArchiveError('已清理的源路径重新出现文件，保留供核对')
-                    entry.update(state='removing',parent_identity=parent_id)
+            with diagnostic_context(source_path=row['source_path'], name=row.get('name'), target_path=row['target_path']):
+                if entry['source_path']!=row['source_path'] or entry['state'] not in ('pending','removing','removed'):
+                    raise ArchiveError('移动清理状态记录无效')
+                if service.stop_event.is_set():
+                    raise ArchiveError('服务停止，移动进度已保留')
+                service._check_roots()
+                target_check(row)
+                with subdirectory(sources,str(PurePosixPath(row['source_path']).parent)) as src:
+                    source_name = PurePosixPath(row['source_path']).name
+                    parent_id = persistent_identity(src)
+                    if entry.get('parent_identity') and entry['parent_identity']!=parent_id:
+                        raise ArchiveError('中转源目录身份发生变化')
+                    try:
+                        checked(src,source_name,row,row['source_signature'])
+                    except FileNotFoundError:
+                        if entry['state'] not in ('removing','removed'):
+                            raise ArchiveError('未开始移动的源文件已缺失，需核对：'+source_name)
+                    else:
+                        if entry['state']=='removed':
+                            raise ArchiveError('已清理的源路径重新出现文件，保留供核对')
+                        entry.update(state='removing',parent_identity=parent_id)
+                        atomic_json(state,name,journal)
+                        service.checkpoint('move_intent',row)
+                        # Recheck after the checkpoint immediately before unlink.
+                        manifests_unchanged()
+                        target_check(row)
+                        checked(src,source_name,row,row['source_signature'])
+                        os.unlink(source_name,dir_fd=src)
+                        os.fsync(src)
+                        service.checkpoint('source_removed',row)
+                    entry['state']='removed'
                     atomic_json(state,name,journal)
-                    service.checkpoint('move_intent',row)
-                    # Recheck after the checkpoint immediately before unlink.
-                    manifests_unchanged()
-                    target_check(row)
-                    checked(src,source_name,row,row['source_signature'])
-                    os.unlink(source_name,dir_fd=src)
-                    os.fsync(src)
-                    service.checkpoint('source_removed',row)
-                entry['state']='removed'
-                atomic_json(state,name,journal)
-                job['summary']['removed_sources']=sum(e['state']=='removed' for e in journal['files'])
-                job['phase']='已校验并清理中转：'+source_name
-                service._save(job)
+                    job['summary']['removed_sources']=sum(e['state']=='removed' for e in journal['files'])
+                    job['phase']='已校验并清理中转：'+source_name
+                    service._save(job)
         journal['completed_at']=now()
         atomic_json(state,name,journal)
-        job.update(status='completed',phase='移动归档完成，目标已校验，中转源文件已清理',completed_at=now(),errors=[])
+        job.update(status='completed',phase='移动归档完成，目标已校验，中转源文件已清理',completed_at=now(),errors=[],issues=[])
         service._save(job)
         return job

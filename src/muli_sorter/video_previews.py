@@ -21,6 +21,7 @@ from .review import validate_model
 
 SCHEMA = 'video-previews/0.7'
 RECIPE = 'three-stills-10-50-90-480x320-v1'
+ERROR_RECIPE = 'preview-errors-durationless-no-zero-seek-v1'
 FORMATS = {'.mp4': 'mov', '.mov': 'mov', '.m4v': 'mov', '.lrf': 'mov',
            '.mts': 'mpegts', '.m2ts': 'mpegts', '.avi': 'avi', '.mkv': 'matroska', '.webm': 'matroska'}
 IMAGE_NAME = re.compile(r'[0-9a-f]{64}\.jpg\Z')
@@ -85,19 +86,32 @@ def extract(fd, file, *, ffmpeg='ffmpeg', ffprobe='ffprobe'):
     if not isinstance(streams, list) or not streams or not isinstance(streams[0], dict):
         raise ValueError('no_video_stream')
     stream = streams[0]
-    duration = float(stream.get('duration', metadata.get('format', {}).get('duration', 0)))
-    if not math.isfinite(duration) or not 0 < duration <= 7 * 86400:
+    duration = 0
+    for raw in (stream.get('duration'), metadata.get('format', {}).get('duration')):
+        if raw in (None, 'N/A'):
+            continue
+        value = float(raw)
+        if not math.isfinite(value) or value < 0 or value > 7 * 86400:
+            raise ValueError('invalid_duration')
+        if value > 0:
+            duration = value
+            break
+    if not math.isfinite(duration) or not 0 <= duration <= 7 * 86400:
         raise ValueError('invalid_duration')
     rate = str(stream.get('avg_frame_rate', '25/1')).split('/')
     fps = float(rate[0]) / float(rate[1]) if len(rate) == 2 and float(rate[1]) else 25
     fps = fps if math.isfinite(fps) and 0 < fps <= 240 else 25
     # Very short clips may have no frame at 90% of the container duration.
     last_frame = max(0, duration - 1 / fps)
-    positions = sorted(set(round(min(duration * part, last_frame), 3) for part in (0.1, 0.5, 0.9)))
+    # A still/attached picture can be a valid MJPEG stream with no duration.
+    # Decode only its first frame, retaining the same time/size bounds.
+    positions = (sorted(set(round(min(duration * part, last_frame), 3) for part in (0.1, 0.5, 0.9)))
+                 if duration else [0.0])
     frames = []
     for position in positions:
         os.lseek(fd, 0, os.SEEK_SET)
-        command = [ffmpeg, '-nostdin', *base, '-threads', '1', '-ss', str(position), '-i', path,
+        seek = ['-ss', str(position)] if position > 0 else []
+        command = [ffmpeg, '-nostdin', *base, '-threads', '1', *seek, '-i', path,
                    '-map', '0:v:0', '-an', '-sn', '-dn', '-frames:v', '1',
                    '-vf', 'scale=480:320:force_original_aspect_ratio=decrease:force_divisible_by=2:out_range=full,format=yuvj420p,setsar=1',
                    '-threads', '1', '-q:v', '4', '-f', 'image2pipe', '-vcodec', 'mjpeg', 'pipe:1']
@@ -141,6 +155,7 @@ def cached(output, entry, unit, staging):
 
 
 def generate_unit(staging, output, unit, extractor=extract):
+    last_error = 'no_supported_video'
     for file in candidates(unit):
         try:
             with source_fd(staging, file) as fd:
@@ -157,10 +172,20 @@ def generate_unit(staging, output, unit, extractor=extract):
             return {'state': 'ready', 'recipe': RECIPE, 'source': identity(file), 'source_signature': before,
                     'source_label': '代理视频' if Path(file['source_path']).suffix.lower() == '.lrf' else '主视频',
                     'source_name': Path(file['source_path']).name, 'frames': frames}
-        except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+        except (OSError, ValueError, KeyError, subprocess.SubprocessError) as exc:
+            if isinstance(exc, FileNotFoundError):
+                last_error = 'source_missing'
+            elif isinstance(exc, subprocess.TimeoutExpired):
+                last_error = 'decode_timeout'
+            elif isinstance(exc, ValueError) and str(exc) in (
+                    'source_size_changed', 'source_changed_during_preview', 'no_video_stream',
+                    'invalid_duration', 'invalid_image'):
+                last_error = str(exc)
+            else:
+                last_error = 'decode_failed'
             continue
     return {'state': 'error', 'message': '暂时无法提取截图，素材仍可确认或暂缓',
-            'retry_after': time.time() + 300, 'frames': []}
+            'error_code':last_error, 'error_recipe':ERROR_RECIPE, 'retry_after': time.time() + 300, 'frames': []}
 
 
 def load_index(output):
@@ -199,7 +224,8 @@ def build(model, staging, output, *, stop=None, once=True, extractor=extract):
         if stop is not None and stop.is_set():
             break
         entry = index['entries'][unit['unit_id']]
-        if entry.get('state') == 'error' and entry.get('retry_after', 0) > time.time():
+        if (entry.get('state') == 'error' and entry.get('error_recipe') == ERROR_RECIPE
+                and entry.get('retry_after', 0) > time.time()):
             continue
         if cached(output, entry, unit, staging):
             continue

@@ -75,6 +75,19 @@ class VideoPreviewTests(unittest.TestCase):
         first=build(self.model,self.staging,self.output,extractor=fail)
         second=build(self.model,self.staging,self.output,extractor=fail)
         self.assertEqual(self.calls,1);self.assertEqual(second['entries']['unit-a']['state'],'error')
+    def test_durationless_stream_uses_one_bounded_first_frame(self):
+        metadata={'streams':[{'codec_name':'mjpeg','avg_frame_rate':'0/0'}],'format':{}}
+        with source_fd(self.staging,self.unit['files'][0]) as fd,patch('muli_sorter.video_previews.subprocess.run') as decoder:
+            decoder.side_effect=[SimpleNamespace(stdout=json.dumps(metadata).encode()),SimpleNamespace(stdout=b'\xff\xd8still\xff\xd9')]
+            frames,before=extract(fd,self.unit['files'][0])
+            self.assertEqual(frames,[(0.0,b'\xff\xd8still\xff\xd9')])
+            self.assertEqual(decoder.call_count,2)
+            self.assertEqual(decoder.call_args.kwargs['timeout'],30)
+            self.assertNotIn('-ss',decoder.call_args.args[0])
+        metadata['streams'][0]['duration']='N/A';metadata['format']['duration']='2'
+        with source_fd(self.staging,self.unit['files'][0]) as fd,patch('muli_sorter.video_previews.subprocess.run') as decoder:
+            decoder.side_effect=[SimpleNamespace(stdout=json.dumps(metadata).encode())]+[SimpleNamespace(stdout=b'\xff\xd8still\xff\xd9')]*3
+            self.assertEqual(len(extract(fd,self.unit['files'][0])[0]),3)
     def test_view_rejects_other_media_identity_and_path_escape(self):
         index=self.ready();view=preview_map(self.output,self.model,prefix='video-previews/')
         self.assertEqual(len(view['unit-a']['frames']),3)

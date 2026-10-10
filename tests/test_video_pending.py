@@ -2,11 +2,14 @@ import copy
 import json
 from pathlib import Path
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 from muli_sorter.order_feed_io import digest
 from muli_sorter.video_previews import signature
-from muli_sorter.video_pending_scope import publish_scope,PendingVideoWorker
+from muli_sorter.video_pending_scope import publish_scope,PendingVideoWorker,VideoDisplayCache
+from muli_sorter.review import identity_digest, legacy_identity_digest
+from muli_sorter.order_feed_io import atomic_json
 
 
 class PendingTests(unittest.TestCase):
@@ -59,5 +62,64 @@ class PendingTests(unittest.TestCase):
             result=original(fd,file);view=copy.deepcopy(self.view);view['units']=[];publish_scope(self.scope,view);return result
         self.worker.extractor=extract;self.worker.step();self.assertFalse(self.worker.step())
         self.assertEqual(self.worker.index['entries'],{})
+
+    def test_new_and_legacy_scope_identity_generate_and_reuse_cached_frames(self):
+        for recipe in (identity_digest, legacy_identity_digest):
+            publish_scope(self.scope,self.view)
+            data=json.loads((self.scope/'current.json').read_text())
+            data['model']['report_id']=recipe(data['model'])
+            data['scope_id']=digest({k:v for k,v in data.items() if k!='scope_id'})
+            atomic_json(self.scope/'current.json',data)
+            self.assertTrue(self.worker.step())
+            self.assertEqual(self.worker.index['entries']['u1']['state'],'ready')
+        self.assertEqual(self.calls,['one.mp4'])
+
+    def test_rebound_tampered_model_is_rejected_and_records_safe_error(self):
+        publish_scope(self.scope,self.view)
+        data=json.loads((self.scope/'current.json').read_text())
+        data['model']['units'][0]['files'][0]['blake3']='b'*64
+        data['scope_id']=digest({k:v for k,v in data.items() if k!='scope_id'})
+        atomic_json(self.scope/'current.json',data)
+        self.assertEqual(self.worker.run(threading.Event(),once=True),1)
+        state=json.loads((self.output/'worker-state.json').read_text())
+        self.assertEqual(state['error_code'],'model_invalid')
+        self.assertEqual(self.calls,[])
+
+    def test_display_distinguishes_waiting_and_fault_without_opening_media(self):
+        descriptor=publish_scope(self.scope,self.view)
+        self.worker.refresh()
+        display=VideoDisplayCache(self.scope/'current.json',self.output)
+        with patch('muli_sorter.video_previews.source_fd',side_effect=AssertionError('display reopened media')):
+            entry=display.read(descriptor)['u1']
+            self.assertEqual(entry['state'],'pending')
+            self.assertEqual(entry['source_name'],'one.mp4')
+            atomic_json(self.output/'worker-state.json',{'state':'waiting_pending_scope','error_code':'model_invalid'})
+            self.assertEqual(display.read(descriptor)['u1']['state'],'error')
+            atomic_json(self.output/'worker-state.json',{'state':'running','scope_id':descriptor['scope_id']})
+            self.assertEqual(display.read(descriptor)['u1']['state'],'pending')
+
+    def test_worker_status_recovers_after_invalid_scope(self):
+        descriptor=publish_scope(self.scope,self.view)
+        path=self.scope/'current.json';valid=path.read_bytes();path.write_text('{}')
+        self.assertEqual(self.worker.run(threading.Event(),once=True),1)
+        path.write_bytes(valid)
+        self.assertEqual(self.worker.run(threading.Event(),once=True),0)
+        state=json.loads((self.output/'worker-state.json').read_text())
+        self.assertEqual(state['state'],'ready')
+        self.assertEqual(state['scope_id'],descriptor['scope_id'])
+        self.assertNotIn('error_code',state)
+
+    def test_ready_preview_survives_unavailable_scope_worker(self):
+        descriptor=publish_scope(self.scope,self.view);self.worker.step()
+        atomic_json(self.output/'worker-state.json',{'state':'waiting_pending_scope','error_code':'scope_unavailable'})
+        self.assertEqual(VideoDisplayCache(self.scope/'current.json',self.output).read(descriptor)['u1']['state'],'ready')
+
+    def test_decoder_upgrade_retries_legacy_error_without_rebuilding_ready_cache(self):
+        publish_scope(self.scope,self.view);self.worker.refresh()
+        self.worker.index['entries']['u1']={'state':'error','frames':[],'retry_after':10**12}
+        self.assertTrue(self.worker.step())
+        self.assertEqual(self.worker.index['entries']['u1']['state'],'ready')
+        self.assertEqual(self.calls,['one.mp4'])
+        self.assertFalse(self.worker.step())
 
 if __name__=='__main__':unittest.main()

@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 import os
 from .intake import EvidenceError, _open, read_bytes, resolve_files, runtime_check, validate_record, media_stat
 from .time_correction_receipt import ReceiptError, receipt_signature
+from .photo_clock_receipt import signature as photo_clock_signature
 from .matching import group_files
 from .review import build_review_model, digest
 from .queue_candidates import refresh as refresh_candidates
@@ -56,6 +57,12 @@ def signal_parts(staging, batch_ids, snapshot, *, allow_examples=False):
         # present, creation, replacement, or removal invalidates the signal.
         if correction_receipt is not None:
             attrs.append(['time_correction_receipt', correction_receipt])
+        try:
+            photo_receipt = photo_clock_signature(staging, bid)
+        except ReceiptError as exc:
+            raise EvidenceError(str(exc)) from exc
+        if photo_receipt is not None:
+            attrs.append(['photo_time_correction', photo_receipt])
         if candidate is not None:
             attrs.append(['postcopy_receipt', candidate['receipt_signature']])
         values[bid] = digest([row, digest(receipt.hex()), attrs])

@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from blake3 import blake3
 from .postcopy_receipt import PostcopyError, validate as validate_postcopy
 from .time_correction_receipt import ReceiptError, validate_receipt
+from .photo_clock_receipt import validate as validate_photo_clock, amended_postcopy
 
 BATCH = re.compile(r"BATCH_\d{8}_\d{6,}\Z")
 HEX = re.compile(r"[0-9a-f]{64}\Z")
@@ -175,6 +176,13 @@ def validate_record(root: Path, batch_id: str, *, allow_examples=False) -> dict:
             m["_postcopy_evidence"] = validate_postcopy(root, batch_id, m, raw, receipt_raw)
         except PostcopyError as exc:
             raise EvidenceError(str(exc)) from exc
+    try:
+        photo_correction = validate_photo_clock(root, batch_id, m, raw)
+    except ReceiptError as exc:
+        raise EvidenceError(str(exc)) from exc
+    if photo_correction is not None:
+        m["_photo_amendment"] = photo_correction
+        m["_postcopy_evidence"] = amended_postcopy(m["_postcopy_evidence"], photo_correction)
     return m
 
 
@@ -221,7 +229,7 @@ def resolve_files(root: Path, m: dict, completed: dict[str, dict], *, check_medi
             original = matches[0]
             if original["hash"]["source"] != f["hash"]["source"] or original["size_bytes"] != f["size_bytes"]:
                 raise EvidenceError("跨批引用内容证据不一致")
-            if owner.get("_amendment"):
+            if owner.get("_amendment") or owner.get("_photo_amendment"):
                 raise EvidenceError("校正批次不能作为跨批重复引用来源")
         path = owner["batch"]["batch_id"] + "/" + original["destination_relative_path"]
         if check_media:
@@ -247,5 +255,16 @@ def resolve_files(root: Path, m: dict, completed: dict[str, dict], *, check_medi
                                    "corrected_capture_time": corrected_time}
             item["correction"] = {"correction_id": amendment["correction_id"],
                                    "original_manifest_blake3": amendment["original_manifest_blake3"]}
+        photo_amendment = owner.get("_photo_amendment") or {}
+        corrected = photo_amendment.get("files", {}).get(original.get("file_id"))
+        if corrected is not None:
+            capture = deepcopy((item.get("metadata") or {}).get("capture_time") or {})
+            capture.update(normalized=corrected["corrected_capture_time"],
+                           wall_time=corrected["corrected_capture_time"][:-6])
+            item["metadata"] = {**(item.get("metadata") or {}), "capture_time": capture}
+            item["hash"] = {**item["hash"], "source": corrected["corrected_blake3"],
+                            "destination": corrected["corrected_blake3"]}
+            item["correction"] = {"correction_id": photo_amendment["correction_id"],
+                                  "receipt_blake3": photo_amendment["receipt_blake3"]}
         resolved.append(item)
     return resolved

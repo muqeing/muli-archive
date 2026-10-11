@@ -5,6 +5,7 @@ from .archive_io import ArchiveError, signature
 from .intake import _open, relative, resolve_files, runtime_check, validate_record, media_stat
 from .postcopy_receipt import PostcopyError, _candidate_signature as candidate_signature
 from .time_correction_receipt import ReceiptError, amendment_evidence, receipt_signature
+from .photo_clock_receipt import signature as photo_clock_signature
 from .matching import group_files
 from .review import digest
 
@@ -47,7 +48,11 @@ def verify_sources(staging, unit, runtime_provider, *, production=False, reviewe
                 correction_stats = receipt_signature(staging, batch_id)
             except ReceiptError as exc:
                 raise ArchiveError(str(exc)) from exc
-            base_key = (batch_id, tuple(evidence_stats), correction_stats, production)
+            try:
+                photo_stats = photo_clock_signature(staging, batch_id)
+            except ReceiptError as exc:
+                raise ArchiveError(str(exc)) from exc
+            base_key = (batch_id, tuple(evidence_stats), correction_stats, photo_stats, production)
             cached = cache.get(('record-base', base_key))
         if cached is not None and cached['batch'].get('result') == 'COPY_VERIFIED':
             m = cached
@@ -125,6 +130,9 @@ def verify_sources(staging, unit, runtime_provider, *, production=False, reviewe
             # this prevents an old confirmation from silently describing the
             # original clock after a media file has been corrected.
             row['amendment'] = amendment
+        if m.get('_photo_amendment') is not None:
+            row['photo_amendment'] = {k:v for k,v in m['_photo_amendment'].items()
+                                     if k != 'files'}
         evidence[bid] = row
     for provenance in unit['provenance']:
         resolved_key = ('resolved', provenance['batch_id'], digest(evidence))

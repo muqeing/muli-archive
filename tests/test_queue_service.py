@@ -95,7 +95,9 @@ class QueueServiceTests(unittest.TestCase):
         recovered = self.service(cycles=60, worker_delay=0.0)
         recovered.run()
         jobs = self.read_jobs()
-        self.assertIn(('BATCH_20260928_000001', 'awaiting_confirmation'), jobs)
+        with sqlite3.connect(self.root/'queue'/'queue.sqlite3') as db:
+            diagnostics = db.execute('SELECT batch_id,state,error,attempts FROM jobs').fetchall()
+        self.assertIn(('BATCH_20260928_000001', 'awaiting_confirmation'), jobs, diagnostics)
 
     def test_interval_rejects_non_finite_or_non_positive_values(self):
         for interval in (0, -1, float('nan'), float('inf'), float('-inf')):

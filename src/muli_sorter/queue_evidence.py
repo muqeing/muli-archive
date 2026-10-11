@@ -5,6 +5,7 @@ from .intake import EvidenceError, _open, read_bytes, resolve_files, runtime_che
 from .time_correction_receipt import ReceiptError, receipt_signature
 from .matching import group_files
 from .review import build_review_model, digest
+from .queue_candidates import refresh as refresh_candidates
 
 
 def completed(row):
@@ -62,7 +63,12 @@ def signal_parts(staging, batch_ids, snapshot, *, allow_examples=False):
 
 
 def signal(staging, batch_ids, snapshot, projects, *, allow_examples=False):
+    # Legacy token recipe retained only to verify rolling migrations.
     return digest([sorted(signal_parts(staging,batch_ids,snapshot,allow_examples=allow_examples).items()),projects])
+
+
+def media_signal(staging, batch_ids, snapshot, *, allow_examples=False):
+    return 'media-evidence/1:' + digest(sorted(signal_parts(staging,batch_ids,snapshot,allow_examples=allow_examples).items()))
 
 
 def build_job(staging, batch_id, snapshot, projects, *, allow_examples=False):
@@ -112,4 +118,5 @@ def build_job(staging, batch_id, snapshot, projects, *, allow_examples=False):
               'batches':[{'batch_id':batch_id,'manifest_id':manifest_id,'status':'verified','groups':groups}]}
     if before != signal_parts(staging,dependencies,snapshot,allow_examples=allow_examples):
         raise EvidenceError('读取清单期间完成证据发生变化')
-    return build_review_model(report, _consume_input=True), dependencies, digest([sorted(before.items()),projects])
+    model = refresh_candidates(build_review_model(report, _consume_input=True), projects)
+    return model, dependencies, 'media-evidence/1:' + digest(sorted(before.items()))

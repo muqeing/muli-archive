@@ -6,7 +6,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-SRC = Path(__file__).resolve().parents[2] / 'media-preview-flow' / 'src'
+# Use this repository's source. Injecting an older checkout into sys.path made
+# spawned classification workers run a different token recipe than the parent.
+SRC = Path(__file__).resolve().parents[1] / 'src'
 sys.path.insert(0, str(SRC))
 
 from muli_sorter.archive import record

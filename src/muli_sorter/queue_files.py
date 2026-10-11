@@ -3,7 +3,6 @@ from contextlib import nullcontext
 import os
 from uuid import uuid4
 from .archive_io import directory, subdirectory, open_file, write_all
-from .intake import MAX_RECORD_BYTES
 
 
 def _attrs(fd, name):
@@ -24,7 +23,10 @@ def _matches(fd, name, expected):
     except FileNotFoundError:
         return False
     try:
-        if os.fstat(f).st_size != len(expected) or len(expected)>MAX_RECORD_BYTES:
+        # These are generated report bytes, not untrusted intake records. The
+        # intake read limit must not make an unchanged large report rewrite on
+        # every preview refresh. Comparison reads stay bounded to 1 MiB chunks.
+        if os.fstat(f).st_size != len(expected):
             return False
         at=0
         while chunk:=os.read(f,1024*1024):

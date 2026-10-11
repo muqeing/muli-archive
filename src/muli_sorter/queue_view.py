@@ -51,14 +51,18 @@ def combine(queue, status):
 
 
 def _publish_model(queue, relative, model, *, checkpoint=None):
-    # Model identity is immutable. Preview dependencies can change within that
-    # identity, so invalidate publication before checking the on-disk bundle.
+    # Preview updates invalidate HTML only. The immutable JSON model retains
+    # its own disk-signature cache and is still repaired if changed or missing.
+    if not hasattr(queue, 'model_bundle_cache'):
+        queue.model_bundle_cache = {}
+    publish_lazy(queue.root,relative,{
+        '确认模型.json':lambda:canonical(model),
+    },cache=queue.model_bundle_cache,checkpoint=checkpoint)
     sources=getattr(queue,'bundle_preview_sources',{})
     source_key=preview_source_key(queue,model)
     if sources.get(relative)!=source_key:
         queue.bundle_cache.pop(relative,None)
     publish_lazy(queue.root,relative,{
-        '确认模型.json':lambda:canonical(model),
         '拍摄段确认.html':lambda:render_with_previews(queue,model),
     },cache=queue.bundle_cache,checkpoint=checkpoint)
     sources[relative]=source_key
@@ -97,7 +101,7 @@ def export(queue, status, *, stopped=False):
         if relative!=base_relative:
             _publish_model(queue,relative,model)
         # Cached signatures are small, but old generations need not accumulate.
-        for cache_name in ('bundle_cache','bundle_preview_sources'):
+        for cache_name in ('bundle_cache','bundle_preview_sources','model_bundle_cache'):
             small_cache=getattr(queue,cache_name,{})
             for old_path in list(small_cache):
                 if old_path not in (base_relative,relative):small_cache.pop(old_path,None)

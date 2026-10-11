@@ -10,7 +10,8 @@ from .cli import output_directory
 from .intake import EvidenceError, _open, read_bytes, decode
 import os
 from .matching import project_index
-from .queue_evidence import build_job, completed, signal, size_verified_candidate
+from .queue_evidence import build_job, completed, signal, media_signal, size_verified_candidate
+from .queue_candidates import refresh as refresh_candidates
 from .queue_source import validate_snapshot
 from .review import canonical, digest
 from .review_render import render_review
@@ -62,6 +63,7 @@ class DiscoveryQueue:
         self.checkpoint = checkpoint or (lambda _:None)
         self.index, self.index_at = None, 0
         self.artifact_cache = {}
+        self.candidate_cache = {}
 
     def __enter__(self):
         return self
@@ -101,6 +103,24 @@ class DiscoveryQueue:
         self.db.execute("UPDATE jobs SET state='retry_wait',attempts=?,next_try=?,error=? WHERE id=?",
                         (n, now+min(60,2**min(n,6)),str(error)[:400],job['id']))
 
+    def verified_model(self, job):
+        self.artifact_valid(job)
+        model = decode(read_bytes(self.root, job['artifact']+'/确认模型.json'))
+        if digest(model) != job['model_hash']:
+            raise EvidenceError('保存的确认模型被修改，需重新生成')
+        return model
+
+    def refresh_candidates(self, job, model, index_key):
+        updated = refresh_candidates(model, self.index)
+        if updated is not model:
+            relative = 'reports/'+job['id']+'/'+updated['report_id']
+            publish(self.root,relative,{'确认模型.json':canonical(updated), '拍摄段确认.html':render_review(
+                updated, project_root_label=os.environ.get('MULI_SORTER_PROJECTS_LABEL', str(self.projects))).encode()})
+            self.db.execute('UPDATE jobs SET artifact=?,model_hash=? WHERE id=?',
+                            (relative,digest(updated),job['id']))
+            self.artifact_cache.pop(job['id'], None)
+        self.candidate_cache[job['id']] = index_key
+
     def discover(self, provider):
         """Refresh the durable queue without running a classification job."""
         now = time.time()
@@ -112,6 +132,7 @@ class DiscoveryQueue:
             if self.index is None or now-self.index_at>=60:
                 self.index = project_index(self.projects)
                 self.index_at = now
+            index_key = digest(self.index)
             self.set_meta('source',{'ok':True,'checked_at':snapshot['generated_at'],'retry_at':0,'failures':0})
         except Exception as exc:
             n = health.get('failures',0)+1
@@ -142,7 +163,7 @@ class DiscoveryQueue:
                 # service discard the stale worker result before publishing.
                 try:
                     deps = json.loads(job['dependencies']) or [row['batch_id']]
-                    token = signal(self.staging,deps,snapshot,self.index,allow_examples=self.examples)
+                    token = media_signal(self.staging,deps,snapshot,allow_examples=self.examples)
                     if token != job['token']:
                         self.db.execute(
                             "UPDATE jobs SET state='queued',token=?,error=NULL,queued_at=?,ready_at=NULL WHERE id=?",
@@ -155,11 +176,24 @@ class DiscoveryQueue:
                 continue
             try:
                 deps = json.loads(job['dependencies']) or [row['batch_id']]
-                token = signal(self.staging,deps,snapshot,self.index,allow_examples=self.examples)
+                token = media_signal(self.staging,deps,snapshot,allow_examples=self.examples)
                 valid = job['state']=='awaiting_confirmation' and token==job['token']
+                model = None
+                if job['state']=='awaiting_confirmation' and not str(job['token']).startswith('media-evidence/1:'):
+                    # A legacy ready model can migrate only when its original
+                    # project catalogue plus CURRENT media evidence reproduces
+                    # the stored token. Queued/unknown results never get promoted.
+                    try:
+                        model = self.verified_model(job)
+                        valid = signal(self.staging,deps,snapshot,model['projects'],allow_examples=self.examples)==job['token']
+                    except FileNotFoundError:
+                        valid = False
                 if valid:
                     try:
                         valid = self.artifact_valid(job)
+                        if self.candidate_cache.get(jid) != index_key:
+                            self.refresh_candidates(job, model or self.verified_model(job), index_key)
+                        self.db.execute('UPDATE jobs SET token=? WHERE id=?',(token,jid))
                     except FileNotFoundError:
                         valid = False
                 if not valid:
@@ -195,12 +229,13 @@ class DiscoveryQueue:
         try:
             model,deps,before = result
             fresh = validate_snapshot(provider())
-            after = signal(self.staging,deps,fresh,self.index,allow_examples=self.examples)
+            after = media_signal(self.staging,deps,fresh,allow_examples=self.examples)
             if before != after:
                 raise EvidenceError('分类期间完成证据变化，稍后重新生成')
             for dep in deps:
                 if not any(s['batch_id']==dep for s in fresh['batches']):
                     raise EvidenceError('依赖批次已消失')
+            model = refresh_candidates(model, self.index)
             relative = 'reports/'+job['id']+'/'+model['report_id']
             publish(self.root,relative,{'确认模型.json':canonical(model),'拍摄段确认.html':render_review(
                 model, project_root_label=os.environ.get('MULI_SORTER_PROJECTS_LABEL', str(self.projects))).encode()})
@@ -208,6 +243,7 @@ class DiscoveryQueue:
             self.db.execute("""UPDATE jobs SET state='awaiting_confirmation',token=?,dependencies=?,
                 artifact=?,model_hash=?,attempts=0,next_try=0,error=NULL,ready_at=? WHERE id=?""",
                 (after,json.dumps(deps),relative,digest(model),time.time(),job['id']))
+            self.candidate_cache[job['id']] = digest(self.index)
         except Exception as exc:
             self.fail(job,exc,time.time())
         self.db.commit()

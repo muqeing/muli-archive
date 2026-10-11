@@ -42,3 +42,18 @@ class QueueModelCache:
         """Recheck snapshot/order freshness without cloning unrelated units."""
         with self.lock:
             return self._current()['report_id']
+
+    def report_for_id(self, report_id):
+        """Read exactly one official immutable page snapshot, never scan history."""
+        if not isinstance(report_id, str) or not re.fullmatch(r'sha256:[a-f0-9]{64}', report_id):
+            raise ValueError('页面清单编号无效')
+        path = self.root/'combined'/report_id/'确认模型.json'
+        before = token(path)
+        if before is None:
+            return None
+        # read_json opens every ancestor without following symbolic links.
+        model = read_json(path)
+        validate_model(model)
+        if model['report_id'] != report_id or token(path) != before:
+            raise ValueError('页面清单内容与编号不一致或读取期间发生变化')
+        return model

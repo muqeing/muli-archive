@@ -52,6 +52,8 @@ class MaterialReports:
         self._rows = {}
 
     def __setitem__(self, key, model):
+        if key != model.get('report_id'):
+            raise ValueError('页面清单缓存编号与模型不一致')
         buffer = io.BytesIO()
         with gzip.GzipFile(fileobj=buffer, mode='wb', compresslevel=1, mtime=0) as stream:
             encoder = json.JSONEncoder(ensure_ascii=False, separators=(',', ':'))
@@ -236,10 +238,12 @@ class ArchiveJobs:
                 other_manifests = {ref['manifest_id'] for ref in other.get('provenance', ())}
                 if (key in other_keys and manifests & other_manifests and
                         other.get('kind') == 'video'):
-                    raise ArchiveError('同清单同片段已有 MP4，不能把 LRF 代理作为唯一主文件')
+                    with diagnostic_context(unit_id=uid):
+                        raise ArchiveError('同清单同片段已有 MP4，不能把 LRF 代理作为唯一主文件')
                 if (other['unit_id'] in approved and key == _clip(standard_dji_proxy_file(other), True)
                         and manifests & other_manifests):
-                    raise ArchiveError('同清单同片段存在多个已批准 LRF 主代理')
+                    with diagnostic_context(unit_id=uid):
+                        raise ArchiveError('同清单同片段存在多个已批准 LRF 主代理')
         return set(approved), companion_links(model, approved_proxy_ids=approved)[0]
 
     def _compile(self, model, decisions):
@@ -531,6 +535,23 @@ class ArchiveJobs:
             if self.thread is not None and not self.thread.is_alive():
                 raise ArchiveError('归档后台已停止，请先检查服务状态')
             model = self.model()
+            if isinstance(decisions, dict) and decisions.get('report_id') != model['report_id']:
+                current = model
+                with self.mutex:
+                    opened = self.material_reports.get(decisions.get('report_id'))
+                if opened is None:
+                    resolver = getattr(self.provider, 'report_for_id', None)
+                    if resolver is not None:
+                        opened = resolver(decisions.get('report_id'))
+                if opened is not None:
+                    # Keep the exact opened-page plan. Only unrelated changes
+                    # may be ignored, never missing/changed selected evidence.
+                    model = opened
+                    from .archive_snapshot_scope import validate_selected_snapshot
+                    compiled = validate_selected_snapshot(opened, current, decisions)
+                    # A newly discovered MP4 may revoke an approved proxy even
+                    # when the selected proxy descriptor itself is unchanged.
+                    self._proxy_authorization(current, decisions, compiled)
             prepared = self._prepare(model, decisions, progress=progress)
             if progress:
                 progress(phase='整理检查结果', current_file='')

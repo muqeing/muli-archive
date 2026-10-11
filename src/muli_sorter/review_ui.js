@@ -37,6 +37,7 @@
         settings.archive_routes = parsedSettings.archive_routes || {};
         settings.archive_state = parsedSettings.archive_state && typeof parsedSettings.archive_state === "object" && !Array.isArray(parsedSettings.archive_state) ? parsedSettings.archive_state : {};
         settings.material_state = parsedSettings.material_state && typeof parsedSettings.material_state === "object" && !Array.isArray(parsedSettings.material_state) ? parsedSettings.material_state : {};
+        settings.discovery_state = parsedSettings.discovery_state && typeof parsedSettings.discovery_state === "object" && !Array.isArray(parsedSettings.discovery_state) ? parsedSettings.discovery_state : {};
       }
     } catch (error) {
       settings = { project_root_label: "拍摄项目" };
@@ -55,6 +56,8 @@
 
   var materialByUnit = Object.create(null);
   var materialState = null;
+  var discoveryState = settings.discovery_state || {};
+  var discoveryBaseline = discoveryState.base_report_id || "";
   var state = {
     segments: [],
     manualProjects: [],
@@ -2125,6 +2128,40 @@
     restorePosition(position);
     return replacement;
   }
+  function emptyTimelineMessage() {
+    var scoped = units.filter(function (unit) {
+      return unitMatchesBatch(unit) && (!state.date || unitDate(unit) === state.date)
+        && !state.archivedByUnit[unit.unit_id] && !state.retainedByUnit[unit.unit_id];
+    });
+    var exceptions = scoped.filter(function (unit) { return materialRole(unit.unit_id) === "exception"; }).length;
+    var support = scoped.filter(function (unit) { return materialRole(unit.unit_id) === "support"; }).length;
+    var incoming = (Array.isArray(discoveryState.batches) ? discoveryState.batches : []).filter(function (row) {
+      return !state.batch || row.batch_id === state.batch;
+    });
+    var processing = incoming.filter(function (row) { return row.state === "processing"; }).length;
+    var queued = incoming.filter(function (row) { return row.state === "queued"; }).length;
+    var waiting = incoming.filter(function (row) { return ["waiting_completion", "verification_required"].indexOf(row.state) >= 0; }).length;
+    var retry = incoming.filter(function (row) { return row.state === "retry_wait"; }).length;
+    var details = (exceptions ? "还有 " + exceptions + " 个素材需要核对，请查看“异常待核对”区块。" : "")
+      + (support ? "另有 " + support + " 个设备附属文件。" : "");
+    if (discoveryState.schema === "discovery-status/1" && discoveryState.source_ok !== true) {
+      return "暂时无法确认分类进度；本页没有可显示的拍摄段，不能据此判断已经全部完成。" + details;
+    }
+    if (processing || queued || waiting || retry) {
+      return "当前筛选暂无可显示的拍摄段。" + (state.date ? "后台分类进度（不限当前拍摄日期）：" : "")
+        + (processing || queued ? "分类进行中：正在整理 " + processing + " 个批次，等待整理 " + queued + " 个批次。" : "")
+        + (waiting ? "另有 " + waiting + " 个批次等待拷贝或内容校验完成。" : "")
+        + (retry ? retry + " 个批次需要核对分类提示。" : "")
+        + "这不代表全部分类或归档完成；新结果就绪后，请保存草稿并查看新素材。" + details;
+    }
+    if (discoveryBaseline && discoveryState.base_report_id && discoveryBaseline !== discoveryState.base_report_id) {
+      return "分类结果已更新；本页仍是旧快照，请保存草稿并查看新素材。" + details;
+    }
+    if (exceptions || support) return "本页当前筛选没有待确认的拍摄段。" + details;
+    if (state.date || state.batch) return "当前日期或批次没有可显示的拍摄段，请调整日期或批次筛选。这不代表其他批次已经完成。";
+    if (retainedUnitCount()) return "本页没有待确认的拍摄段；已复制但未完整校验的素材仍保留来源，请查看归档状态。";
+    return archivedUnitCount() ? "本页已识别的拍摄素材均已归档，暂无待确认拍摄段。" : "本页暂无待确认拍摄段。";
+  }
   function render(presentationOnly) {
     var position = rememberPosition();
     if (photoObserver) photoObserver.disconnect();
@@ -2135,7 +2172,9 @@
     shown.sort(function (left, right) { return segmentSortKey(left) - segmentSortKey(right); });
     var shownPendingUnits = shown.filter(function (segment) { return segment.decision === "pending"; }).reduce(function (sum, segment) { return sum + segment.unit_ids.length; }, 0);
     if (!shown.length) {
-      fragment.appendChild(make("p", "empty", archivedUnitCount() && !state.segments.some(function (segment) { return !segment._archiveDeferred && !segment._retainedDeferred; }) ? "当前报告的素材均已归档，暂无待处理素材。" : "当前筛选没有拍摄段。"));
+      var empty = make("p", "empty", emptyTimelineMessage());
+      empty.id = "timeline-empty-status"; empty.setAttribute("role", "status");
+      fragment.appendChild(empty);
     } else if (!shownPendingUnits && !state.date && !state.projectQuery && archivedUnitCount() + retainedUnitCount() >= units.length) {
       fragment.appendChild(make("p", "empty", "已完成：没有待处理素材。"));
     }
@@ -2242,6 +2281,16 @@
     reconcileArchiveSegments();
   }
   render(); renderArchiveHistory();
+  window.addEventListener("muli-discovery-status", function (event) {
+    var data = event.detail;
+    if (!data || data.schema !== "discovery-status/1" || !Array.isArray(data.batches)) return;
+    discoveryState = data;
+    if (!discoveryBaseline) discoveryBaseline = data.base_report_id || "";
+    // Refresh only the empty-state wording. Polling never rewrites the plan,
+    // closes cards, prunes selections, or reloads somebody's open draft.
+    var empty = byId("timeline-empty-status");
+    if (empty) empty.textContent = emptyTimelineMessage();
+  });
   if (settings.archive_state && settings.archive_state.report_id && String(settings.archive_state.report_id) !== String(model.report_id || "")) {
     setStatus("归档状态来自其他报告，未应用；当前选择和页面状态未改变。", "error");
   }

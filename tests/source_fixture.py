@@ -203,4 +203,3 @@ def _postcopy_env(receipt_root: Path | None):
             os.environ.pop("MULI_POSTCOPY_RECEIPTS", None)
         else:
             os.environ["MULI_POSTCOPY_RECEIPTS"] = old
-

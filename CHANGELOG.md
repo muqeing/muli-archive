@@ -1,3 +1,11 @@
+## 0.16.3 — 2026-10-13
+
+- Add versioned JSON archive API client `muli-archive`, with read-only discovery, unconfirmed plan templates, explicit preflight/submission, guarded move authorization and bounded GET waits.
+- Preserve detailed service diagnostics, unknown write outcomes and confirmation ticket binding; no automatic retry or media access by the client.
+- Build and check the installed CLI wheel on every GitHub update; client, package metadata and future health version share the release version.
+- Make the ingest Git worktree authoritative in the publishing helper; historical deployment bundles no longer overwrite maintained source/CLI files.
+- This release adds client tooling. Publishing source does not restart or update existing NAS images.
+
 ## 2026-10-11 photo-clock-original-1（已上线验收）
 
 支持读取独立的已完成 ARW 拍摄时间校正回执，绑定原始摄入清单、原独立内容校验及校正后的文件摘要/身份；分类使用校正后的时间和日期候选，归档使用新内容证明。原始证据保留，未完成、冲突、跨批引用或错误回执继续阻断。可选回执只使相关批次的分类和来源缓存失效；程序不会自动修改原片。

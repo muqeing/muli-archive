@@ -16,9 +16,10 @@ if bad:
     sys.exit('syntax gate failed:\n' + '\n'.join(bad))
 print('syntax gate ok')
 PY
-MSG="$1"
-if [ -z "$MSG" ]; then MSG="Update archive console and classifier"; fi
-git add -A
+MSG="${1:-Update archive console and CLI}"
+uv run --locked python -m unittest discover -s tests
+uv build
+git add src tests docs tools .github pyproject.toml uv.lock README.md CHANGELOG.md
 if git diff --cached --quiet; then echo 'nothing to publish'; exit 0; fi
 git commit -m "$MSG"
 git push origin main

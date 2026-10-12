@@ -106,7 +106,8 @@ class LANTests(Fixture,unittest.TestCase):
                     urlopen(Request(local+'/api/preflight',data=body,headers={**headers,**changes}),timeout=5)
                 self.assertEqual(e.exception.code,403)
             with urlopen(local+'/health',timeout=5) as r:
-                self.assertEqual(json.load(r)['version'],'0.16.2')
+                from muli_sorter import __version__
+                self.assertEqual(json.load(r)['version'],__version__)
             with self.assertRaises(HTTPError):urlopen(local+'/api/jobs',timeout=5)
         finally:
             server.shutdown();server.server_close();thread.join(2)

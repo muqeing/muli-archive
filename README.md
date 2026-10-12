@@ -1,3 +1,13 @@
+## 2026-10-13 CLI 0.16.3（客户端）
+
+新增 `muli-archive`，适合 AI 工具查询拍摄段、候选项目、预检票据及归档任务，并以 JSON 返回具体错误位置。写命令默认只预览；显式执行沿用正式 API、确认范围、内容校验及移动授权。CLI 和服务同包同版本，每次 GitHub 更新自动测试、构建并提供安装包；现有 NAS 接口可直接使用，无需为 CLI 重启服务。使用说明见 [CLI 文档](docs/cli.md)。
+
+```sh
+uv tool install --from git+https://github.com/muqeing/muli-archive.git muli-sorter-preview
+muli-archive --version
+muli-archive schema
+```
+
 ## 2026-10-11 photo-clock-original-1（已上线验收）
 
 支持读取独立的已完成 ARW 拍摄时间校正回执，绑定原始摄入清单、原独立内容校验及校正后的文件摘要/身份；分类使用校正后的时间和日期候选，归档使用新内容证明。原始证据保留，未完成、冲突、跨批引用或错误回执继续阻断。可选回执只使相关批次的分类和来源缓存失效；程序不会自动修改原片。

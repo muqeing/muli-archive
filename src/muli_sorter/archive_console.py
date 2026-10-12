@@ -282,7 +282,8 @@ def make_server(jobs, queue, *, host='127.0.0.1', port=0, public_origin=None, al
                 if route in {f'/help/step-{i}.png' for i in range(1, 7)}:
                     return self.reply(200, (Path(__file__).with_name('help')/route.rsplit('/', 1)[1]).read_bytes(), 'image/png')
                 if route=='/health':
-                    return self.reply(200,{'service':'muli-sorter-console','version':'0.16.2',
+                    from . import __version__
+                    return self.reply(200,{'service':'muli-sorter-console','version':__version__,
                                            'submission_enabled':jobs.enabled,'move_enabled':jobs.move_enabled,'example_data':not jobs.production,
                                            'worker_running':bool(jobs.thread and jobs.thread.is_alive())})
                 if route=='/':

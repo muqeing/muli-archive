@@ -1,0 +1,39 @@
+name: Source and CLI checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install synthetic media test decoders
+        run: sudo apt-get update && sudo apt-get install --yes ffmpeg
+      - run: uv sync --locked --all-extras
+      - name: Synthetic regression checks
+        run: uv run --locked python -m unittest discover -s tests -v
+      - name: Build versioned distributions
+        run: uv build
+      - name: Check installed wheel entrypoint and package version
+        run: |
+          uv venv /tmp/muli-archive-wheel
+          uv pip install --python /tmp/muli-archive-wheel/bin/python --no-deps dist/*.whl
+          cd /tmp
+          /tmp/muli-archive-wheel/bin/muli-archive --version
+          /tmp/muli-archive-wheel/bin/muli-archive schema
+          /tmp/muli-archive-wheel/bin/python -c 'import importlib.metadata as m; from muli_sorter import __version__; assert m.version("muli-sorter-preview") == __version__'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: muli-archive-distributions-${{ github.sha }}
+          path: dist/*

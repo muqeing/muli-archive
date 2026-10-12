@@ -1,6 +1,5 @@
 from copy import deepcopy
 from datetime import datetime, timezone
-import importlib.util
 import json
 import os
 from pathlib import Path
@@ -13,9 +12,7 @@ from muli_sorter.archive_io import ArchiveError
 from muli_sorter.review import digest
 import test_archive_direct_move as direct_tests
 
-spec = importlib.util.spec_from_file_location('source_fixture_bench', Path(__file__).resolve().parents[2] / 'benchmark-preflight-source.py')
-fixtures = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(fixtures)
+import source_fixture as fixtures
 
 
 class ReceiptReuseTests(unittest.TestCase):

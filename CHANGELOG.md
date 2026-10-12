@@ -5,6 +5,7 @@
 - Build and check the installed CLI wheel on every GitHub update; client, package metadata and future health version share the release version.
 - Make the ingest Git worktree authoritative in the publishing helper; historical deployment bundles no longer overwrite maintained source/CLI files.
 - This release adds client tooling. Publishing source does not restart or update existing NAS images.
+- Make synthetic content-proof test fixtures self-contained and check the shared coordination protocol against the maintained ingest repository in CI.
 
 ## 2026-10-11 photo-clock-original-1（已上线验收）
 

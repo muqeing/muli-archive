@@ -20,8 +20,12 @@ def ingest_protocol_module():
     its own work directory, so accept the current layout and the historical one
     and skip when neither is checked out beside this repository.
     """
+    checked_out = Path(__file__).resolve().parents[1] / 'sibling-ingest/src/muli_ingest/staging_coordination.py'
+    if checked_out.is_file():
+        return checked_out
     root = Path(__file__).resolve().parents[2]
-    for relative in ('ingest/src/muli_ingest/staging_coordination.py',
+    for relative in ('github/muli-ingest/src/muli_ingest/staging_coordination.py',
+                     'ingest/src/muli_ingest/staging_coordination.py',
                      'ingest-source-release/src/muli_ingest/staging_coordination.py',
                      'metadata-batch-repair/baseline/muli_ingest/staging_coordination.py'):
         candidate = root / relative

@@ -433,6 +433,9 @@ def make_server(jobs, queue, *, host='127.0.0.1', port=0, public_origin=None, al
                     return self.reply(200,jobs.checks.cancel(body['client_id'],body['revision']))
                 if route=='/api/submissions' and set(body)=={'preview_id','decisions','confirmed'}:
                     return self.reply(202,submissions.start(body['preview_id'],body['decisions'],body['confirmed']))
+                match=re.fullmatch(r'/api/submissions/([a-f0-9]{64})/recover',route)
+                if match and set(body)=={'confirmed'}:
+                    return self.reply(202,submissions.recover(match[1],body['confirmed']))
                 if route=='/api/submit' and set(body)=={'preview_id','decisions','confirmed'}:
                     result = jobs.submit(body['preview_id'],body['decisions'],body['confirmed'])
                     page_cache.invalidate()

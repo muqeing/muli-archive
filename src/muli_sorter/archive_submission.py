@@ -39,8 +39,14 @@ class Submissions:
                     job = self.jobs.get(row['expected_job_id'])
                     if job.get('report_id') == row['report_id']:
                         return {'submission_id':token, 'status':'accepted', 'job_id':job['job_id']}
+                request = self.jobs.state/'requests'/('request-'+row['expected_job_id']+'.json')
+                available = request.is_file() and (self.jobs.state/'confirmation-tickets'/(token+'.json')).is_file()
                 return {'submission_id':token, 'status':'unknown',
-                        'error':'上次提交被中断，尚不能确认结果；不会自动重放，请保留此页面并核对任务。'}
+                        'recovery_available':available,
+                        'expected_job_id':row['expected_job_id'],
+                        'interrupted_stage':'request_saved_before_job' if available else 'unresolved',
+                        'error':'提交中断，任务尚未生成；可核对原计划后恢复原提交。' if available else
+                                '上次提交被中断，尚不能确认结果；不会自动重放，请保留此页面并核对任务。'}
             result = {k:v for k,v in row.items() if k in ('submission_id','status','job_id','error','issues','created_at')}
             progress = self.progress.get(token)
             if progress is not None:
@@ -73,6 +79,45 @@ class Submissions:
             self.active[token] = thread
             thread.start()
             return self.get(token)
+
+    def recover(self, token, confirmed):
+        """Explicitly resume an interrupted admission, using its original ID."""
+        p = self.path(token)
+        with self.lock:
+            if self.closed or confirmed is not True or not self.jobs.enabled:
+                raise ArchiveError('必须明确确认恢复原提交')
+            row = read_json(p)
+            if row.get('status') not in ('checking', 'unknown', 'accepted'):
+                raise ArchiveError('该提交不能恢复，请核对原记录')
+            current = self.get(token)
+            if current['status'] == 'accepted':
+                return current
+            if token in self.active:
+                return self.get(token)
+            if self.active:
+                raise ArchiveError('已有提交正在核对，请等待原提交结果')
+            # Durable authorization precedes work. GET and ordinary start never
+            # call this path, even when a recoverable request is discovered.
+            row = dict(row, status='checking', recovery_authorized_at=time.time())
+            atomic_json(p, row)
+            thread = threading.Thread(target=self._run_recovery, args=(token, row),
+                                      name='archive-submit-recovery', daemon=True)
+            self.active[token] = thread
+            thread.start()
+            return self.get(token)
+
+    def _run_recovery(self, token, row):
+        from .archive_admission import recover
+        try:
+            job = recover(self.jobs, token, row)
+            result = dict(row, status='accepted', job_id=job['job_id'], recovered_at=time.time())
+        except Exception as exc:
+            result = dict(row, status='unknown', error=str(exc)[:500])
+        with self.lock:
+            try:
+                atomic_json(self.path(token), result)
+            finally:
+                self.active.pop(token, None)
 
     def _run(self, token, decisions, row):
         def progress(**changes):

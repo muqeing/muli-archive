@@ -1,3 +1,9 @@
+## 0.16.4 — 2026-10-16
+
+- Stream atomic archive-state JSON writes through a bounded buffer instead of constructing the full historical reservation output in memory; preserve record format, fsync/rename durability and fail-closed writes.
+- Add explicit recovery for a persisted confirmed request interrupted before job publication. Validate the original ticket, submission time/scope, roots, request digest and reservations; retain the original job ID and all execution checks. Reads and ordinary submissions never auto-recover.
+- Show a guarded “恢复原提交” action when request and confirmation evidence exist; add JSON CLI `recover-submission ID --execute --confirmed`. Recovery executes the original copy/move plan, never the page's newer selections.
+
 ## 0.16.3 — 2026-10-13
 
 - Add versioned JSON archive API client `muli-archive`, with read-only discovery, unconfirmed plan templates, explicit preflight/submission, guarded move authorization and bounded GET waits.

@@ -64,7 +64,7 @@ wheels = [
 
 [[package]]
 name = "muli-sorter-preview"
-version = "0.16.3"
+version = "0.16.4"
 source = { editable = "." }
 dependencies = [
     { name = "blake3" },

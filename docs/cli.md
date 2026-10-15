@@ -111,3 +111,15 @@ polls. They are bounded, positive, finite values.
 
 Use the schema command and command help when adapting an AI agent. Do not put
 customer plans, receipts, media, access codes or private screenshots in public Git.
+
+
+### 恢复提交中断
+
+服务在保存请求后、生成任务前中断时，`submission ID` 会返回 `unknown`，可能同时给出 `recovery_available: true`。先核对原提交，再显式执行：
+
+```bash
+muli-archive --url http://NAS:18767 recover-submission SUBMISSION_ID
+muli-archive --url http://NAS:18767 recover-submission SUBMISSION_ID --execute --confirmed
+```
+
+第一条仅预览，无网络请求。第二条沿用原确认票据、原项目归属、原复制或移动方式及原任务编号，不使用当前页面的新计划。已过期票据只可用于完成其有效期内已经记录的提交，不能创建新范围。网络结果不明只读取原提交状态，不自动重复写请求；缺证据、绑定变化、预约冲突或已有异常执行记录均阻断。

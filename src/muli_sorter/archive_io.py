@@ -133,11 +133,15 @@ def atomic_json(directory_fd, name, value):
     temp = '.record-' + uuid4().hex
     fd = open_file(directory_fd, temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
     try:
-        write_all(fd, (json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False) + '\n').encode())
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-    try:
+        # Do not materialize the entire historical reservation table as a
+        # second Unicode tree, joined string and encoded byte array. Buffered
+        # text writes retain JSON's existing on-disk format with bounded output
+        # memory. A failed encoder never publishes its partially written file.
+        with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as stream:
+            json.dump(value, stream, ensure_ascii=False, indent=2, allow_nan=False)
+            stream.write('\n')
+            stream.flush()
+            os.fsync(stream.fileno())
         os.replace(temp, name, src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
         os.fsync(directory_fd)
     finally:

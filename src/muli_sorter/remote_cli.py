@@ -29,6 +29,7 @@ COMMANDS = {
     "submission": "GET /api/submissions/{id}",
     "preflight": "POST /api/preflight-checks", "cancel-check": "POST /api/preflight-checks/cancel",
     "submit": "POST /api/submissions", "retry": "POST /api/jobs/{id}/retry",
+    "recover-submission": "POST /api/submissions/{id}/recover (explicit original-plan recovery)",
     "wait": "GET only polling of check, submission, or job", "version": "local version; optional remote GET",
 }
 
@@ -225,10 +226,10 @@ def parser():
     segments.add_argument("--date", help="YYYY-MM-DD; compares capture dates, not ingest dates")
     segments.add_argument("--offset", type=int, default=0)
     segments.add_argument("--limit", type=positive, default=50)
-    for name in ("job", "check", "ticket", "submission", "retry"):
+    for name in ("job", "check", "ticket", "submission", "retry", "recover-submission"):
         sub = commands.add_parser(name)
         sub.add_argument("id", type=identifier)
-        if name == "retry":
+        if name in ("retry", "recover-submission"):
             sub.add_argument("--execute", action="store_true")
             sub.add_argument("--confirmed", action="store_true")
     for name in ("preflight", "submit", "cancel-check"):
@@ -278,7 +279,7 @@ def run(args):
         if args.offset < 0 or args.limit > 500 or args.date and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", args.date):
             raise ClientError("invalid_arguments", "offset >=0, limit <=500, date YYYY-MM-DD required", exit_code=2)
     # Preparing a mutation makes no connection, including no health request.
-    if args.command in ("preflight", "submit", "cancel-check", "retry"):
+    if args.command in ("preflight", "submit", "cancel-check", "retry", "recover-submission"):
         body = {}
         if args.command in ("preflight", "submit"):
             body["decisions"] = decisions_file(args.decisions)
@@ -291,11 +292,13 @@ def run(args):
             options = body["decisions"].get("archive_options", {"mode": "copy", "existing": "error"})
             if args.execute and options.get("mode") == "move" and not args.confirm_move:
                 raise ClientError("confirmation_required", "Move submission requires --confirm-move for source removal", exit_code=2)
+        elif args.command == "recover-submission":
+            path, body = resource("submission", args.id) + "/recover", {"confirmed": args.confirmed}
         else:
             path, body = resource("job", args.id) + "/retry", {"confirmed": args.confirmed}
         if not args.execute:
             return {"dry_run": True, "request": {"method": "POST", "path": path, "body": body}, "network_used": False}
-        if args.command in ("submit", "retry") and not args.confirmed:
+        if args.command in ("submit", "retry", "recover-submission") and not args.confirmed:
             raise ClientError("confirmation_required", "Execution requires --confirmed", exit_code=2)
         value = Client(args.url, args.timeout).request(path, body)
         return value if args.command == "cancel-check" else check_result(value)

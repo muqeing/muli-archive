@@ -1022,6 +1022,7 @@
   }
   function clearSubmissionMarker() {
     stopSubmissionPoll();
+    setSubmissionRecoveryVisible(false);
     submissionRecoveryId = null;
     submissionRecoveryStatus = null;
     submissionRecoveryPlanFingerprint = null;
@@ -1078,8 +1079,29 @@
     uncertainSubmit = true;
     persistSubmissionMarker(submissionRecoveryId, "unknown");
     setPreflightRetryVisible(false);
-    setStatus(submissionResultText(data) + "，请刷新任务状态；不会盲目重试提交。", "error");
+    setSubmissionRecoveryVisible(data && data.recovery_available === true);
+    setStatus(submissionResultText(data) + (data && data.recovery_available === true ? " 恢复将沿用原计划和原任务编号，不会重复提交。" : "，请刷新任务状态；不会盲目重试提交。"), "error");
     updateSubmitButton();
+  }
+  function setSubmissionRecoveryVisible(visible) {
+    var button = byId("archive-submit-recover");
+    if (button) { button.hidden = !visible; button.disabled = submitBusy; }
+  }
+  async function recoverSubmission() {
+    if (!submissionRecoveryId || submitBusy || !uncertainSubmit) return;
+    if (!window.confirm("恢复上次已确认的归档计划？将沿用原任务编号和原项目归属，按原复制或移动方式执行。当前页面的新选择不会替换原计划。")) return;
+    var id = submissionRecoveryId;
+    submitBusy = true;
+    setSubmissionRecoveryVisible(false);
+    updateSubmitButton();
+    setStatus("正在核对并恢复原提交…", "");
+    try {
+      var data = await requestJson("/api/submissions/" + encodeURIComponent(id) + "/recover", { method: "POST", headers: { "Content-Type": "application/json", "X-Muli-Request": "1" }, body: JSON.stringify({ confirmed: true }) });
+      handleSubmissionResult(data, revision, frozenPlan || submissionPlan(review.getPlan()));
+    } catch (error) {
+      submitBusy = false;
+      unknownSubmission({ status: "unknown", error: "恢复结果尚未确认，请刷新任务状态核对原提交。" });
+    }
   }
   function handleSubmissionResult(data, submissionRevision, submissionPlan) {
     if (data && typeof data.submission_id === "string" && data.submission_id) submissionRecoveryId = data.submission_id;
@@ -1088,6 +1110,7 @@
     if (status === "accepted") return acceptedSubmission(data, submissionRevision, submissionPlan);
     if (status === "rejected") return rejectedSubmission(data);
     if (status === "checking") {
+      setSubmissionRecoveryVisible(false);
       submitBusy = false;
       uncertainSubmit = true;
       persistSubmissionMarker(submissionRecoveryId, "checking");
@@ -1357,6 +1380,12 @@
     submit.id = "archive-submit-button";
     submit.addEventListener("click", submitPlan);
     actions.appendChild(submit);
+    var recover = make("button", "secondary", "恢复原提交");
+    recover.type = "button";
+    recover.id = "archive-submit-recover";
+    recover.hidden = true;
+    recover.addEventListener("click", recoverSubmission);
+    actions.appendChild(recover);
     var preflightRetry = make("button", "secondary", "重新检查");
     preflightRetry.type = "button";
     preflightRetry.id = "archive-submit-preflight-retry";

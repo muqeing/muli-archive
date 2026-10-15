@@ -603,8 +603,6 @@ class ArchiveJobs:
                 raise ArchiveError('提交范围已变化或检查已过期，请重新检查')
             if progress:
                 progress(phase='接收已确认计划')
-            origin_report_id = ticket.get('origin_report_id', ticket['model']['report_id'])
-            scoped_decisions = ticket.get('scoped_decisions', decisions)
             # Accept the exact reviewed plan; no model reload, media read,
             # directory walk, or second preflight in the submission path.
             # Execution still checks paths, batch locks and actual file identity.
@@ -612,45 +610,9 @@ class ArchiveJobs:
             job_id = fresh['job_id']
             if self._job_path(job_id).exists():
                 return self.get(job_id)
-            request = {'model':ticket['model'],'decisions':deepcopy(scoped_decisions),'job_id':job_id,'roots':self.identity,'file_plans':fresh['file_plans']}
-            request['admission_policy'] = 'confirmed-plan/v1'
-            if 'scope_binding' in ticket:
-                request['scope_binding'] = ticket['scope_binding']
-
-            from .archive_rename_io import STRATEGY
-            if fresh['execution_strategy'] == STRATEGY:
-                request.update(execution_strategy=STRATEGY, source_evidence=fresh['evidence'],
-                               target_parent_identities=fresh['target_parent_identities'],
-                               verification_policy='postcopy-signature-or-full-read/v1',
-                               validated_signatures=fresh['validated_signatures'])
-
-            if progress:
-                progress(phase='保存本次归档任务', current_file='')
-            reservations = record(self.state_fd, 'reservations.json', {})
-            for row in fresh['file_plans'].values():
-                with diagnostic_context(source_path=row['source_path'], name=row.get('name'), target_path=row['target_path']):
-                    prior = reservations.get(row['source_path'])
-                    reservation = {'target_path':row['target_path'],'blake3':row['blake3']}
-                    if prior is not None and prior != reservation:
-                        raise ArchiveError('本次素材已被另一份归档计划占用，请保留原任务并核对')
-                    reservations[row['source_path']] = reservation
-            save_json(self.state/'requests'/('request-'+job_id+'.json'),request)
-            atomic_json(self.state_fd, 'reservations.json', reservations)
-            s=fresh['summary']
-            job={'job_id':job_id,'status':'queued','phase':'等待归档','created_at':now(),'report_id':origin_report_id,
-                 'example_data':not self.production,'confirmed_at':now(),
-                 'storage':'verified_move' if fresh['archive_options']['mode']=='move' else 'independent_copy',
-                 'archive_options':fresh['archive_options'],'file_plans':fresh['file_plans'],
-                 'execution_strategy':fresh['execution_strategy'],
-                 'request_digest':digest(request),'target_identities':fresh['target_identities'],'folders':{},
-                 'summary':{'total_units':s['units'],'total_files':s['files'],'total_bytes':s['bytes'],
-                            'completed_units':0,'completed_files':0,'processed_bytes':0,
-                            'planned_direct_move_files':s.get('direct_move_files',0),'direct_moved_files':0,
-                            'skipped_files':0,'copy_files':0,'renamed_files':s['renamed_files'],'removed_sources':0},
-                 'projects':fresh['projects'],'outcomes':[],'errors':[]}
-            self._save(job)
-            self.wake.set()
-            return job
+            from .archive_admission import confirmed_request, publish
+            request = confirmed_request(self, ticket)
+            return publish(self, ticket, request, progress=progress)
 
     def retry(self, job_id, confirmed):
         with self.mutex:

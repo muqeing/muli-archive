@@ -127,6 +127,21 @@ class RemoteCliTests(unittest.TestCase):
         self.assertEqual(result["data"]["status"], "checking")
         self.assertEqual(len(self.calls), 1)
 
+    def test_recovery_is_explicit_and_uses_original_submission(self):
+        code, result = self.call("recover-submission", TOKEN)
+        self.assertEqual(code, 0)
+        self.assertTrue(result["data"]["dry_run"])
+        self.assertEqual(self.calls, [])
+        code, _ = self.call("recover-submission", TOKEN, "--execute")
+        self.assertEqual(code, 2)
+        self.assertEqual(self.calls, [])
+        self.responses.append((202, {"status": "checking", "submission_id": TOKEN}))
+        code, _ = self.call("recover-submission", TOKEN, "--execute", "--confirmed")
+        self.assertEqual(code, 0)
+        self.assertEqual(self.calls[0][:2], ("POST", "/api/submissions/"+TOKEN+"/recover"))
+        self.assertEqual(self.calls[0][3], {"confirmed": True})
+        self.assertEqual(len(self.calls), 1)
+
     def test_blocked_check_has_details_and_failed_exit(self):
         issues = [{"segment_id": "s1", "source_path": "synthetic.mp4"}]
         self.responses.append((200, {"status": "blocked", "issues": issues}))

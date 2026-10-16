@@ -80,6 +80,17 @@ class ReservationIndexTests(unittest.TestCase):
         self.assertEqual(reopened.subset(list(rows)), rows)
         reopened.close()
 
+    def test_frozen_legacy_binding_uses_stable_filesystem_identity(self):
+        from muli_sorter.archive_reservations import _legacy_signature
+        legacy=self.write_legacy({'old':{'target_path':'old/A','blake3':HASH_A}})
+        inode=legacy.stat().st_ino
+        with patch('muli_sorter.archive_reservations.persistent_identity',return_value=[777,inode]):
+            self.assertEqual(_legacy_signature(legacy)[:2],[777,inode])
+            index=ReservationIndex(self.root,self.identity)
+            self.assertIsNotNone(index.get('old'));index.close()
+            reopened=ReservationIndex(self.root,self.identity)
+            self.assertIsNotNone(reopened.get('old'));reopened.close()
+
     def test_rollback_export_is_complete_without_changing_legacy_or_authority(self):
         legacy=self.write_legacy({'old':{'target_path':'old/A','blake3':HASH_A}})
         before=legacy.read_bytes()

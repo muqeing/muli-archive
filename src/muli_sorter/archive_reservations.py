@@ -20,7 +20,7 @@ import stat
 import threading
 import unicodedata
 
-from .archive_io import ArchiveError
+from .archive_io import ArchiveError, persistent_identity
 from .intake import decode, read_bytes
 
 
@@ -63,7 +63,16 @@ def _legacy_signature(path: Path):
         return "absent"
     if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
         raise ArchiveError("旧预留记录文件身份异常")
-    return [info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns]
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        current = os.fstat(fd)
+        if (current.st_dev, current.st_ino) != (info.st_dev, info.st_ino):
+            raise ArchiveError("旧预留记录读取期间发生变化")
+        # Linux device numbers may change after a NAS reboot. Persist the same
+        # filesystem identity scheme as ArchiveJobs, not the transient st_dev.
+        return [*persistent_identity(fd), current.st_size, current.st_mtime_ns, current.st_ctime_ns]
+    finally:
+        os.close(fd)
 
 
 def _validate_path(value, label):

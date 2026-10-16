@@ -28,8 +28,10 @@ def plan_rows(projects_fd, selected, options, reservations, frozen=None, *, cach
     # Keep every owner so replaying that task cannot mistake its own reservation
     # for a different task merely because another source was inserted last.
     reserved_targets = {}
-    for path, reservation in reservations.items():
-        reserved_targets.setdefault(fold(reservation['target_path']), {})[path] = reservation
+    indexed = hasattr(reservations, 'owners')
+    if not indexed:
+        for path, reservation in reservations.items():
+            reserved_targets.setdefault(fold(reservation['target_path']), {})[path] = reservation
     counts = {'skipped_files':0, 'renamed_files':0, 'copy_files':0, 'cleanup_files':0}
     checked = 0
     for item in selected:
@@ -87,7 +89,7 @@ def plan_rows(projects_fd, selected, options, reservations, frozen=None, *, cach
                                     identical = same_content(dest,candidate,row,cache=cache,
                                         progress=(lambda count: progress(bytes_delta=count)) if progress else None)
                         if not present:
-                            owners = reserved_targets.get(fold(target), {})
+                            owners = reservations.owners(target) if indexed else reserved_targets.get(fold(target), {})
                             owns_target = row['source_path'] in owners and all(
                                 r['target_path'] == target and r['blake3'] == row['blake3']
                                 for r in owners.values())

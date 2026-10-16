@@ -33,6 +33,9 @@ def snapshot(queue):
             except (OSError, ValueError):
                 item['verification'] = {'state': 'unavailable'}
         rows.append(item)
-    return {'schema': 'discovery-status/1', 'base_report_id': match.group(1) if match else '',
+    lifecycle=state.get('lifecycle',{})
+    counts=lifecycle.get('counts',{}) if lifecycle.get('enabled') is True else {}
+    retired={k:v for k,v in counts.items() if k in ('closed','cancelled','needs_attention','superseded') and type(v) is int and v>=0}
+    return {'lifecycle':retired,'schema': 'discovery-status/1', 'base_report_id': match.group(1) if match else '',
             'checked_at': state.get('generated_at'), 'source_ok': state.get('source', {}).get('ok') is True,
             'batches': rows}

@@ -2160,6 +2160,12 @@
     if (exceptions || support) return "本页当前筛选没有待确认的拍摄段。" + details;
     if (state.date || state.batch) return "当前日期或批次没有可显示的拍摄段，请调整日期或批次筛选。这不代表其他批次已经完成。";
     if (retainedUnitCount()) return "本页没有待确认的拍摄段；已复制但未完整校验的素材仍保留来源，请查看归档状态。";
+    var retired = discoveryState.lifecycle || {};
+    if (!units.length && (retired.closed || retired.cancelled || retired.needs_attention)) {
+      return "当前没有待确认拍摄段。" + (retired.closed ? retired.closed + " 个批次已结案，详情按需查看历史。" : "")
+        + (retired.cancelled ? retired.cancelled + " 个批次已取消分类；素材未删除。" : "")
+        + (retired.needs_attention ? "另有 " + retired.needs_attention + " 个批次单独待核对，可查询分类历史。" : "");
+    }
     return archivedUnitCount() ? "本页已识别的拍摄素材均已归档，暂无待确认拍摄段。" : "本页暂无待确认拍摄段。";
   }
   function render(presentationOnly) {

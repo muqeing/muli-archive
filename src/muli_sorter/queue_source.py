@@ -13,6 +13,20 @@ PROJECTION = ','.join("json_extract(data,'$."+f+"') AS "+f for f in FIELDS)
 SQL = "SELECT "+PROJECTION+" FROM objects WHERE kind='batch' ORDER BY id LIMIT "+str(MAX_BATCHES+1)
 
 
+def snapshot_sql(include_handoff=False):
+    if not include_handoff:
+        return SQL
+    fields = ('status', 'revision', 'confirmed_file_count', 'total_file_count',
+              'missing_file_count', 'checked_at', 'expires_at', 'source_disposition')
+    extra = ','.join(repr(k) + ",json_extract(data,'$.archive_handoff." + k + "')" for k in fields)
+    return SQL.replace(' FROM objects', ",json_object(" + extra + ") AS archive_handoff FROM objects")
+
+
+def snapshot_rows(rows):
+    return [{k: (json.loads(v) if k == 'archive_handoff' else v)
+             for k, v in dict(row).items()} for row in rows]
+
+
 def validate_snapshot(snapshot, now=None):
     if not isinstance(snapshot, dict) or snapshot.get('complete_listing') is not True:
         raise EvidenceError('需要完整批次状态列表，不能用截断的最近批次列表')
@@ -44,7 +58,7 @@ def validate_snapshot(snapshot, now=None):
     return snapshot
 
 
-def sqlite_snapshot(path):
+def sqlite_snapshot(path, *, include_handoff=False):
     """Version-coupled adapter for an already authorized local read-only state mount.
 
     mode=ro and query_only are intentional; immutable is unsafe with active WAL.
@@ -58,16 +72,16 @@ def sqlite_snapshot(path):
     try:
         conn.execute('PRAGMA query_only=ON')
         conn.row_factory = sqlite3.Row
-        rows = conn.execute(SQL).fetchall()
+        rows = conn.execute(snapshot_sql(include_handoff)).fetchall()
         if len(rows)>MAX_BATCHES:
             raise EvidenceError('批次数超过读取上限；需要分页适配，不能静默遗漏')
         return validate_snapshot({'generated_at':started, 'complete_listing':True,
-                                  'source':'ingest_sqlite_readonly', 'batches':[dict(r) for r in rows]})
+                                  'source':'ingest_sqlite_readonly', 'batches':snapshot_rows(rows)})
     finally:
         conn.close()
 
 
-def ssh_snapshot(host, database):
+def ssh_snapshot(host, database, *, include_handoff=False):
     """Read via an existing, trusted SSH identity; no credential file inspection."""
     if not host or host.startswith('-') or any(c.isspace() for c in host):
         raise EvidenceError('SSH 主机别名无效')
@@ -80,8 +94,8 @@ started=datetime.now(timezone.utc).isoformat()
 c=sqlite3.connect(Path({database!r}).as_uri()+'?mode=ro',uri=True,timeout=1)
 c.execute('PRAGMA query_only=ON')
 c.row_factory=sqlite3.Row
-rows=c.execute({SQL!r}).fetchall()
-print(json.dumps({{'generated_at':started,'complete_listing':True,'source':'ingest_ssh_sqlite_readonly','batches':[dict(r) for r in rows]}}))
+rows=c.execute({snapshot_sql(include_handoff)!r}).fetchall()
+print(json.dumps({{'generated_at':started,'complete_listing':True,'source':'ingest_ssh_sqlite_readonly','batches':[{{k:(json.loads(v) if k=='archive_handoff' else v) for k,v in dict(r).items()}} for r in rows]}}))
 c.close()
 '''
     result = subprocess.run(['ssh','-o','BatchMode=yes','-o','StrictHostKeyChecking=yes',

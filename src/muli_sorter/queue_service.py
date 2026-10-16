@@ -57,6 +57,7 @@ class QueueService:
         provider,
         *,
         allow_examples=False,
+        enable_lifecycle=False,
         interval=2.0,
         cycles=0,
         worker_delay=0.0,
@@ -85,6 +86,7 @@ class QueueService:
         self.pending = None
         self.stop_event = threading.Event()
         self.allow_examples = allow_examples
+        self.enable_lifecycle = enable_lifecycle
 
     def _start_worker(self):
         if self.worker is not None and self.worker.is_alive():
@@ -183,7 +185,7 @@ class QueueService:
         if self.pending is None:
             return
         job = self.pending['job']
-        row = next((item for item in self.queue.jobs() if item['id'] == job['id']), None)
+        row = next((item for item in self.queue.jobs(active_only=self.enable_lifecycle) if item['id'] == job['id']), None)
         if row is None or row['state'] != 'processing':
             self._discard_pending_worker()
             return
@@ -235,6 +237,7 @@ class QueueService:
                 self.projects,
                 self.state,
                 allow_examples=self.allow_examples,
+                enable_lifecycle=self.enable_lifecycle,
             )
             self._start_worker()
             while not self.stop_event.is_set() and (not self.cycles or cycles < self.cycles):
@@ -243,7 +246,7 @@ class QueueService:
                 self._reap_one(snapshot)
                 self._accept_held(snapshot)
                 row = next(
-                    (item for item in self.queue.jobs() if self.pending and item['id'] == self.pending['job']['id']),
+                    (item for item in self.queue.jobs(active_only=self.enable_lifecycle) if self.pending and item['id'] == self.pending['job']['id']),
                     None,
                 )
                 if self.pending is not None and row is None:
@@ -289,8 +292,8 @@ def _provider(args):
     if args.snapshot:
         return lambda: load_json(args.snapshot)
     if args.ssh_host:
-        return lambda: ssh_snapshot(args.ssh_host, args.remote_db)
-    return lambda: sqlite_snapshot(args.state_db)
+        return lambda: ssh_snapshot(args.ssh_host, args.remote_db, include_handoff=args.enable_batch_lifecycle)
+    return lambda: sqlite_snapshot(args.state_db, include_handoff=args.enable_batch_lifecycle)
 
 
 def main(argv=None):
@@ -305,6 +308,8 @@ def main(argv=None):
     parser.add_argument('--interval', type=float, default=2.0)
     parser.add_argument('--cycles', type=int, default=0)
     parser.add_argument('--synthetic', action='store_true')
+    parser.add_argument('--enable-batch-lifecycle', action='store_true',
+                        help='完整归档反馈确认后持久结案；历史分页查询，不删除素材')
     args = parser.parse_args(argv)
     if (not math.isfinite(args.interval) or args.interval <= 0) or (args.interval < 2 and args.cycles == 0) or args.cycles < 0:
         parser.error('常驻 interval 至少为 2 秒，cycles 不能为负数')
@@ -326,6 +331,7 @@ def main(argv=None):
         args.output,
         _provider(args),
         allow_examples=args.synthetic,
+        enable_lifecycle=args.enable_batch_lifecycle,
         interval=args.interval,
         cycles=args.cycles,
     ).run()

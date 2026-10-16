@@ -1,3 +1,11 @@
+## 0.17.0 — 2026-10-16
+
+- Add opt-in durable classification closure from a fresh complete revision-bound archive handoff; retired models leave the active queue, partial work stays active, new revisions remain discoverable.
+- Add explicit classification cancellation and query-only paged history CLI; neither operation deletes media or cancels archive execution.
+- Add identity-bound transactional reservation queries, immutable legacy migration and bounded-memory rollback export; never fall back to stale JSON after index activation.
+- Add an explicit-build derived history catalog with latest unit/content routing and SQL pagination. Current scopes still revalidate original receipts, retained-copy protections and move journals. Bound recent job summaries to20 and compressed report caches to4/32MiB.
+- Preserve default service behavior behind activation flags. No automatic history expiry/deletion; existing handoff freshness and cleanup authorization remain. Source publication is independent from NAS migration and production acceptance.
+
 ## 0.16.4 — 2026-10-16
 
 - Stream atomic archive-state JSON writes through a bounded buffer instead of constructing the full historical reservation output in memory; preserve record format, fsync/rename durability and fail-closed writes.

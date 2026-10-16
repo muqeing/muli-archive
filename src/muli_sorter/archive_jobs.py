@@ -91,7 +91,7 @@ def copy_project(project):
 
 class ArchiveJobs:
     def __init__(self, staging, projects, state, model_provider, runtime_provider, *,
-                 production=False, enabled=False, project_label=None, checkpoint=None, move_enabled=False, direct_move_view=None):
+                 production=False, enabled=False, project_label=None, checkpoint=None, move_enabled=False, direct_move_view=None, indexed_reservations=False, indexed_history=False, build_history_catalog=False):
         self.staging, self.projects, self.state = [Path(p).absolute() for p in (staging, projects, state)]
         if any(self.state == p or self.state.is_relative_to(p) or p.is_relative_to(self.state)
                for p in (self.staging, self.projects)):
@@ -130,11 +130,24 @@ class ArchiveJobs:
                 raise ArchiveError('任务目录的归档规则、素材来源、项目根目录或运行模式已改变，不能套用旧任务')
             atomic_json(self.state_fd, 'service-identity.json', identity)
             self.identity = identity
+            self.reservations = None
+            if indexed_reservations:
+                from .archive_reservations import ReservationIndex
+                self.reservations = ReservationIndex(self.state, identity)
+                self.stack.callback(self.reservations.close)
+            elif (self.state / 'reservations.sqlite3').exists():
+                raise ArchiveError('预留索引已启用；禁止回退读取旧 JSON，请先按迁移说明恢复回退记录')
             from .archive_tickets import PersistentTickets
             self.previews = PersistentTickets(self.state/'confirmation-tickets', self.identity)
             self.target_digests = TargetDigestCache(disk_path=self.state/'target-digests-v1.sqlite3', ttl=30*24*3600)
             self.stack.callback(self.target_digests.close)
-            self.history = ArchiveHistory(self.state, identity, self.label, self.production)
+            if indexed_history:
+                from .scoped_archive_history import ScopedArchiveHistory
+                self.history = ScopedArchiveHistory(self.state, identity, self.label, self.production,
+                                                   initialize=build_history_catalog)
+                self.stack.callback(self.history.close)
+            else:
+                self.history = ArchiveHistory(self.state, identity, self.label, self.production)
             from .archive_source_preparation import SourcePreparation
             self.source_preparation = SourcePreparation(self)
         except BaseException:
@@ -356,7 +369,7 @@ class ArchiveJobs:
         from .archive_target_evidence import SelectedTargetEvidence
         target_evidence = SelectedTargetEvidence(self, selected, self.target_digests)
         with directory(self.projects) as target:
-            counts = plan_rows(target,selected,options,record(self.state_fd,'reservations.json',{}),
+            counts = plan_rows(target,selected,options,self.reservations if self.reservations is not None else record(self.state_fd,'reservations.json',{}),
                                (accepted or {}).get('file_plans'), cache=target_evidence, progress=progress)
         job_id = self._planned_id(selected,decisions)
         from .archive_rename_io import eligible, STRATEGY
@@ -383,7 +396,8 @@ class ArchiveJobs:
             if project.get('order_id'):
                 current_orders.setdefault(project['order_id'], []).append(project['path'])
         with directory(self.projects) as fd, directory(self.state/'units') as units_fd:
-            reservations = record(self.state_fd, 'reservations.json', {})
+            reservations = (self.reservations.subset(row['source_path'] for item in selected for row in item['rows'])
+                            if self.reservations is not None else record(self.state_fd, 'reservations.json', {}))
             for path, project in projects.items():
                 with diagnostic_context(project_id=project['project_id'], target_path=path):
                     if progress:

@@ -14,7 +14,7 @@ def compact_archive(state, project_unit_ids=()):
             'archived_unit_ids': [row['unit_id'] for row in current],
             'parent_projects': {row['unit_id']: row['project'] for row in current if row['unit_id'] in project_unit_ids},
             'current_files': sum(row.get('file_count', len(row.get('files', []))) for row in current),
-            'history_total': len(entries), 'history_generation': digest(state),
+            'history_total': state.get('history_total',len(entries)), 'history_generation': state.get('history_generation',digest(state)),
             'warnings': list(state.get('warnings', [])),
             'retained_unit_ids': list(state.get('retained_unit_ids', [])),
             'retained_current_files': state.get('retained_current_files', 0),

@@ -172,7 +172,7 @@ def _item(receipt, project_parts, label, current):
     return item
 
 
-def project_external_history(state, identity, label, production, current, reader=read_json, selected_only=False):
+def project_external_history(state, identity, label, production, current, reader=read_json, selected_only=False, *, receipt_paths=None):
     """Return valid external items and at most one warning.
 
     The directory is intentionally only inspected when it already exists as a
@@ -194,11 +194,13 @@ def project_external_history(state, identity, label, production, current, reader
     if not isinstance(projects_root, str):
         return [], [EXTERNAL_WARNING]
     try:
-        paths = sorted(root.iterdir(), key=lambda p: p.name)
+        paths = sorted(root.iterdir() if receipt_paths is None else receipt_paths, key=lambda p: p.name)
     except OSError:
         return [], [EXTERNAL_WARNING]
     for path in paths:
         try:
+            if path.parent != root:
+                raise ExternalReceiptError('外部归档回执路径越界')
             if not path.is_file() or path.is_symlink():
                 raise ExternalReceiptError("外部归档回执文件类型无效")
             receipt = reader(path)

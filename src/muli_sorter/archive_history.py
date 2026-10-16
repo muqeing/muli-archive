@@ -153,13 +153,14 @@ class ArchiveHistory:
                        for u in model['units'] if u['unit_id'] in unit_ids}
             return self._snapshot(model['report_id'], current, selected_only=True)
 
-    def _snapshot(self, report_id, current, selected_only=False):
+    def _snapshot(self, report_id, current, selected_only=False, *, job_paths=None, include_external=True, collector=None):
         archived, warnings, move_contexts = {}, [], {}
         retained_projections = []
         # Reuse a completed job's compact projection only while every receipt
         # and cleanup journal has the same inode, size, mtime and ctime.
         live_jobs = set()
-        for path in sorted((self.state / 'requests').glob('job-*.json')):
+        paths = (self.state / 'requests').glob('job-*.json') if job_paths is None else job_paths
+        for path in sorted(paths):
             if not re.fullmatch('job-' + HEX + r'\.json', path.name):
                 continue
             live_jobs.add(path)
@@ -256,7 +257,11 @@ class ArchiveHistory:
                         previous = self.cache.pop(dependency, None)
                         if previous:
                             self.cache_bytes -= previous[0][1]
+            if collector is not None:
+                collector.extend(items)
             for original, scope_digest in items:
+                if selected_only and original['unit_id'] not in current:
+                    continue
                 item = dict(original, project=dict(original["project"]),
                             files=[dict(row) for row in original["files"]])
                 uid, when = item['unit_id'], item['completed_at']
@@ -266,14 +271,16 @@ class ArchiveHistory:
                 previous = archived.get(uid)
                 if previous is None or (when, item['job_id']) > (previous['completed_at'], previous['job_id']):
                     archived[uid] = item
-        for path in set(self.retained_projected) - live_jobs:
-            self.retained_projected.pop(path, None)
-        for path in set(self.projected) - live_jobs:
-            self._drop_projection(path)
-        if not selected_only:
-            self._prune_index(live_jobs)
-        external, external_warnings = project_external_history(
-            self.state, self.identity, self.label, self.production, current, reader=self.read, selected_only=selected_only)
+        if job_paths is None:
+            for path in set(self.retained_projected) - live_jobs:
+                self.retained_projected.pop(path, None)
+            for path in set(self.projected) - live_jobs:
+                self._drop_projection(path)
+            if not selected_only:
+                self._prune_index(live_jobs)
+        external, external_warnings = (project_external_history(
+            self.state, self.identity, self.label, self.production, current, reader=self.read,
+            selected_only=selected_only) if include_external else ([], []))
         warnings.extend(external_warnings)
         # A service-generated receipt is authoritative when both records name
         # the same unit. External receipts only fill a missing history item.

@@ -122,3 +122,18 @@ class ScopeTests(unittest.TestCase):
                 jobs=SimpleNamespace(state=root,enabled=True,previews={token:{'expires_at':time.time()+1200,'decisions':d,'prepared':{'job_id':jid},'model':{'report_id':'r'}}},submit=fail)
                 pending=Submissions(jobs);pending.start(token,d,True);pending.close()
                 self.assertEqual(pending.get(token)['status'],'unknown' if partial else 'rejected')
+
+class RecentCatalogBoundsTests(unittest.TestCase):
+    def test_bad_cold_history_does_not_block_recent_tasks_or_grow_cache(self):
+        import os
+        from muli_sorter.order_feed_io import atomic_json
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td).resolve()
+            for n in range(100):
+                p=root/f'job-old-{n}.json';p.write_text('{')
+                os.utime(p,(1,1))
+            for n in range(25):
+                atomic_json(root/f'job-current-{n}.json',{'job_id':str(n),'status':'completed'})
+            catalog=JobCatalog(root)
+            self.assertEqual(len(catalog.snapshot()),20)
+            self.assertEqual(len(catalog.rows),20)

@@ -35,7 +35,9 @@ def publish(jobs, ticket, request, *, progress=None, saved_request=False, confir
     plan, job_id = ticket['prepared'], request['job_id']
     if progress:
         progress(phase='保存本次归档任务', current_file='')
-    reservations = record(jobs.state_fd, 'reservations.json', {})
+    index = jobs.reservations
+    reservations = (index.subset(plan['file_plans']) if index is not None
+                    else record(jobs.state_fd, 'reservations.json', {}))
     for row in plan['file_plans'].values():
         with diagnostic_context(source_path=row['source_path'], name=row.get('name'), target_path=row['target_path']):
             prior = reservations.get(row['source_path'])
@@ -45,7 +47,10 @@ def publish(jobs, ticket, request, *, progress=None, saved_request=False, confir
             reservations[row['source_path']] = reservation
     if not saved_request:
         save_json(jobs.state/'requests'/('request-'+job_id+'.json'), request)
-    atomic_json(jobs.state_fd, 'reservations.json', reservations)
+    if index is not None:
+        index.reserve(reservations)
+    else:
+        atomic_json(jobs.state_fd, 'reservations.json', reservations)
     # Drop the large historical table before constructing/hashing a job.
     del reservations
     stamp = datetime.now(timezone.utc).isoformat()

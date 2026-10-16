@@ -328,6 +328,10 @@ def make_server(jobs, queue, *, host='127.0.0.1', port=0, public_origin=None, al
                         bundle = page_cache.get_display_bundle()
                         if bundle is None:
                             return self.reply(202, {'status': 'building'})
+                    if hasattr(jobs.history, 'page'):
+                        if report_id != bundle['archive_state']['report_id']:
+                            raise ValueError('历史记录来自其他报告，请保存草稿后刷新页面')
+                        return self.reply(200, jobs.history.page(report_id,generation,offset,limit))
                     return self.reply(200, history_page(bundle, report_id, generation, offset, limit))
                 if route=='/api/material-state':
                     query = parse_qs(urlsplit(self.path).query)
@@ -500,10 +504,15 @@ def main(argv=None):
     parser.add_argument('--ingest-url', help='独立拷贝备份服务的公开根地址，仅用于页面交接')
     parser.add_argument('--allow-lan-origin',action='store_true',help='仅用于已限制来源的独立局域网网关')
     parser.add_argument('--enable-project-writes',action='store_true')
+    parser.add_argument('--indexed-history', action='store_true', help='使用已迁移的历史目录，只核对当前相关回执')
+    parser.add_argument('--build-history-catalog', action='store_true', help='停服空闲后显式迁移历史目录并退出；不处理素材')
+    parser.add_argument('--indexed-reservations', action='store_true', help='事务迁移旧预留记录，按素材及目标精确查询')
     parser.add_argument('--enable-source-removal',action='store_true',help='允许明确提交的移动任务在目标校验后逐文件清理中转')
     parser.add_argument('--direct-move-root',help='已确认的单一挂载项目根；内含素材中转，仅用于新MOVE任务')
     parser.add_argument('--demo-root',help='仅使用带合成标记的独立实验目录')
     args=parser.parse_args(argv)
+    if args.build_history_catalog and not args.indexed_history:
+        parser.error('构建历史目录须配合indexed-history')
     if args.demo_root:
         demo=Path(args.demo_root).absolute()
         if str(demo).startswith('/Volumes/') or read_json(demo/'SYNTHETIC_ONLY.json') != MARKER:
@@ -522,7 +531,14 @@ def main(argv=None):
         provider=QueueModelCache(args.queue)
     jobs=ArchiveJobs(args.staging,args.projects,args.state,provider,runtime,
                      production=not bool(args.demo_root),enabled=args.enable_project_writes,project_label=args.project_label,move_enabled=args.enable_source_removal,
+                     indexed_reservations=args.indexed_reservations,indexed_history=args.indexed_history,
+                     build_history_catalog=args.build_history_catalog,
                      direct_move_view={'root':args.direct_move_root,'staging':'素材中转','projects':'.'} if args.direct_move_root else None)
+    if args.build_history_catalog:
+        report=jobs.history.migration_status()
+        jobs.close()
+        print(json.dumps({'history_catalog':report,'media_modified':False},ensure_ascii=False))
+        return 0
     photos=PhotoPreviews(jobs.staging,jobs.state/'photo-previews')
     server=make_server(jobs,args.queue,photo_previews=photos,host=args.host,port=args.port,public_origin=args.public_origin,
                        allow_lan_origin=args.allow_lan_origin, ingest_url=args.ingest_url)

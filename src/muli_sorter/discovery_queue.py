@@ -12,6 +12,7 @@ import os
 from .matching import project_index
 from .queue_evidence import build_job, completed, signal, media_signal, size_verified_candidate
 from .queue_candidates import refresh as refresh_candidates
+from . import batch_lifecycle as lifecycle
 from .queue_source import validate_snapshot
 from .review import canonical, digest
 from .review_render import render_review
@@ -24,7 +25,7 @@ RULES = 'discovery-0.4'
 
 
 class DiscoveryQueue:
-    def __init__(self, staging, projects, state, *, allow_examples=False, checkpoint=None):
+    def __init__(self, staging, projects, state, *, allow_examples=False, checkpoint=None, enable_lifecycle=False):
         self.staging, self.projects = Path(staging).resolve(strict=True), Path(projects).resolve(strict=True)
         self.root = output_directory(state, [self.staging, self.projects])
         if str(self.root).startswith('/Volumes/'):
@@ -55,10 +56,16 @@ class DiscoveryQueue:
                 raise EvidenceError('队列目录已经绑定另一来源、规则或演示模式')
             self.set_meta('identity', identity)
             self.db.execute("UPDATE jobs SET state='queued' WHERE state='processing'")
+            if self.get_meta('batch_lifecycle') and not enable_lifecycle:
+                raise EvidenceError('批次结案已启用，禁止关闭后重新激活旧批次；请先完成明确的回退核对')
+            if enable_lifecycle:
+                lifecycle.initialize(self.db)
+                self.set_meta('batch_lifecycle', {'schema': 'batch-workflow/1'})
             self.db.commit()
         except BaseException:
             self.stack.close()
             raise
+        self.lifecycle_enabled = enable_lifecycle
         self.examples = allow_examples
         self.checkpoint = checkpoint or (lambda _:None)
         self.index, self.index_at = None, 0
@@ -78,8 +85,21 @@ class DiscoveryQueue:
     def set_meta(self, key, value):
         self.db.execute('INSERT OR REPLACE INTO meta VALUES (?,?)',(key,json.dumps(value,ensure_ascii=False)))
 
-    def jobs(self):
-        return [dict(r) for r in self.db.execute('SELECT * FROM jobs ORDER BY first_seen,id')]
+    def jobs(self, *, active_only=False):
+        sql='SELECT * FROM jobs'
+        if active_only:
+            sql+=" WHERE state NOT IN ('closed','cancelled','needs_attention','superseded')"
+        return [dict(r) for r in self.db.execute(sql+' ORDER BY first_seen,id')]
+
+    def cancel(self, job_id, confirmed):
+        if not self.lifecycle_enabled:
+            raise EvidenceError('批次生命周期尚未启用')
+        with self.db:
+            return lifecycle.cancel(self.db,job_id,confirmed)
+
+    def history_page(self, offset=0, limit=50):
+        return lifecycle.history_page(self.db,offset,limit)
+
 
     def artifact_valid(self, job):
         attrs=[]
@@ -150,6 +170,15 @@ class DiscoveryQueue:
             job = dict(self.db.execute('SELECT * FROM jobs WHERE id=?',(jid,)).fetchone())
             if job['batch_id'] != row['batch_id']:
                 raise EvidenceError('同一批次身份更换目录，需核对来源')
+            if self.lifecycle_enabled:
+                if job['state'] in ('closed','cancelled','needs_attention'):
+                    if job['state'] == 'closed' and (row['state'] != 'COMPLETED' or row['result'] not in ('COPY_VERIFIED','COPY_SIZE_VERIFIED')):
+                        lifecycle.retire(self.db, job, 'needs_attention', {'reason':'closed_batch_state_changed', 'source_state':row['state'], 'source_result':row['result']})
+                    continue  # Persisted same-revision retirement survives lease expiry/restart.
+                if lifecycle.confirmed_handoff(row,now):
+                    lifecycle.retire(self.db,job,'closed',row['archive_handoff'])
+                    self.artifact_cache.pop(jid,None);self.candidate_cache.pop(jid,None)
+                    continue
             candidate = size_verified_candidate(self.staging, row, allow_examples=self.examples)
             if not completed(row) and candidate is None:
                 state='verification_required' if row['state']=='COMPLETED' else 'waiting_completion'
@@ -200,7 +229,7 @@ class DiscoveryQueue:
                     self.db.execute("UPDATE jobs SET state='queued',token=?,error=NULL,queued_at=?,ready_at=NULL WHERE id=?",(token,now,jid))
             except Exception as exc:
                 self.fail(job,exc,now)
-        for job in self.jobs():
+        for job in self.jobs(active_only=self.lifecycle_enabled):
             if job['id'] not in current:
                 self.db.execute("UPDATE jobs SET state='superseded',error=? WHERE id=?",('当前完整列表已无此版本',job['id']))
         self.db.commit()
@@ -210,7 +239,7 @@ class DiscoveryQueue:
     def claim_jobs(self, max_jobs=1):
         """Claim queued work in the parent process; workers never open this DB."""
         claimed = []
-        for job in [j for j in self.jobs() if j['state']=='queued'][:max_jobs]:
+        for job in [j for j in self.jobs(active_only=self.lifecycle_enabled) if j['state']=='queued'][:max_jobs]:
             self.db.execute("UPDATE jobs SET state='processing' WHERE id=?",(job['id'],))
             self.db.commit()
             self.checkpoint('claimed')
@@ -273,4 +302,5 @@ class DiscoveryQueue:
     def status(self):
         return {'mode':'readonly_discovery_queue','rules':RULES,'media_write_authorized':False,
                 'example_data':self.examples,'generated_at':datetime.now(timezone.utc).isoformat(),
-                'source':self.get_meta('source'),'jobs':self.jobs()}
+                'source':self.get_meta('source'),'jobs':self.jobs(active_only=self.lifecycle_enabled),
+                **({'lifecycle':{'enabled':True,'counts':{r[0]:r[1] for r in self.db.execute('SELECT state,count(*) FROM jobs GROUP BY state')}}} if self.lifecycle_enabled else {})}

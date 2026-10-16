@@ -13,6 +13,7 @@ from .video_preview_view import render_with_previews, preview_source_key
 
 LABELS = {'waiting_completion':'等待拷贝校验完成','queued':'已入队，等待整理','processing':'正在整理',
           'awaiting_confirmation':'已整理，待确认归属','retry_wait':'需要重试 / 核对','superseded':'旧版本已停用',
+          'closed':'已结案','cancelled':'已取消分类','needs_attention':'单独待核对',
           'verification_required':'需要精准内容校验证据'}
 
 
@@ -22,6 +23,8 @@ def combine(queue, status):
     groups, metadata, snapshots = defaultdict(dict), {}, []
     excluded=[]
     for job in status['jobs']:
+        if job['state'] in ('closed','cancelled','needs_attention','superseded') and status.get('lifecycle',{}).get('enabled'):
+            continue
         if job['state']!='awaiting_confirmation':
             excluded.append({'batch_id':job['batch_id'],'status':job['state'],'reasons':[job['error'] or LABELS[job['state']]]})
             continue
@@ -38,6 +41,9 @@ def combine(queue, status):
                 g['file_count']+=unit['file_count']
         metadata.update({p['project_id']:p for p in model['projects']})
     if not snapshots:
+        if status.get('lifecycle',{}).get('enabled'):
+            return build_review_model({'mode':'read_only_preview','example_data':queue.examples,
+                'generated_at':status['generated_at'],'projects':[],'batches':excluded})
         return None
     report={'mode':'read_only_preview','example_data':queue.examples,'generated_at':max(snapshots),
             'projects':sorted(metadata.values(),key=lambda p:p['project_id']),
@@ -128,13 +134,15 @@ def export(queue, status, *, stopped=False):
     if order_status.get('last_verified_at'):
         at=datetime.fromisoformat(order_status['last_verified_at']).astimezone(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M:%S 北京时间')
         order_details+=f'<small>最近订单核验：{escape(at)}</small>'
+    retired=(status.get('lifecycle') or {}).get('counts',{})
+    retired_note=('历史：'+str(retired.get('closed',0))+' 批已结案，'+str(retired.get('cancelled',0))+' 批已取消分类；详情按需查询，素材未删除。') if status.get('lifecycle',{}).get('enabled') else ''
     html=f'''<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>素材分类队列</title>
 <style>body{{font:16px/1.6 system-ui;background:#f5f3ee;color:#23352d;margin:0}}main{{max-width:940px;margin:auto;padding:28px 18px}}h1{{font-size:28px}}.muted{{color:#647068}}.banner,article,.stats{{background:white;border:1px solid #d9ddd4;border-radius:14px;padding:18px;margin:14px 0}}.stats{{display:flex;gap:24px;flex-wrap:wrap}}.stats b{{font-size:28px;display:block}}article strong{{display:block;overflow-wrap:anywhere}}article span{{color:#3b6854}}p{{overflow-wrap:anywhere}}.button{{display:inline-block;background:#285c43;color:white;border-radius:9px;padding:12px 18px;text-decoration:none}}small{{display:block;overflow-wrap:anywhere}}</style>
 <main><p class="muted">木梨 · 素材归属</p><h1>素材分类队列</h1><p>{state}</p><small>采集：{escape(checked)}</small>
 <div class="banner"><strong>{health}</strong>{error}<p>只读取拷贝状态和清单。所有归属仍待确认，真实文件没有归档。</p></div>
 <div class="stats"><div><b>{counts['batches']}</b>个当前批次</div><div><b>{counts['prepared_batches']}</b>批已整理</div><div><b>{counts['candidate_segments']}</b>段候选拍摄</div><div><b>{counts['unique_files']}</b>个去重文件</div></div>
 <div class="banner"><strong>{order_message}</strong>{order_details}<p>订单读取独立运行；暂时不可用时继续整理素材，保留已生成的历史确认页。</p></div>
-{action}<p class="muted">同一中转原件的跨批重复引用合并确认；按拍摄日期匹配历史项目。</p>{cards}
+{action}<p class="muted">{escape(retired_note)}</p><p class="muted">同一中转原件的跨批重复引用合并确认；按拍摄日期匹配历史项目。</p>{cards}
 <p class="muted">{'合成实验。' if queue.examples else ''}当前页面是只读状态快照。确认页面保存归属计划，不触发项目文件写入。</p></main></html>'''
     publish(queue.root,None,{'队列状态.json':(json.dumps(display,ensure_ascii=False,indent=2)+'\n').encode(),
                              '分类队列.html':html.encode()})

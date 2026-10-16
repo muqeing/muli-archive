@@ -37,6 +37,28 @@ class HistoryCatalogTests(unittest.TestCase):
                         "size_bytes": size, "blake3": digest}],
         }
 
+    def test_startup_streams_large_payloads_without_sorting_them(self):
+        # Former startup window query copied whole JSON records into a sorter.
+        # Inspect SQLite's actual plan for each executed validation SELECT:
+        # large item_json rows must use the existing ordered index directly.
+        catalog=HistoryCatalog(self.path,self.identity)
+        items=[]
+        for i in range(100):
+            item=self.item('job-main',f'unit-{i:04d}','2026-01-01T00:00:00Z',HASH_A,i)
+            item['note']='x'*400000
+            items.append((item,SCOPE))
+        catalog.replace_job('job-main',items)
+        captured=[]
+        catalog._db.set_trace_callback(captured.append)
+        catalog._validate_rows()
+        query=next(q for q in captured if q.startswith('SELECT i.unit_id,i.job_id'))
+        plan=list(catalog._db.execute('EXPLAIN QUERY PLAN '+query))
+        self.assertFalse(any('TEMP B-TREE' in r[3] for r in plan),plan)
+        self.assertEqual(catalog.total,100)
+        catalog.close()
+        reopened=HistoryCatalog(self.path,self.identity)
+        self.assertEqual(reopened.total,100);reopened.close()
+
     def test_latest_unit_wins_and_metadata_is_separate(self):
         catalog = HistoryCatalog(self.path, self.identity)
         catalog.replace_job("job-old", [(self.item("job-old", "unit-1", "2026-01-01T00:00:00Z"), SCOPE)])

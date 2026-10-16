@@ -254,11 +254,16 @@ class HistoryCatalog:
             _job_id(job_id)
             _unit_id(unit_id)
             _fingerprint((digest, size))
+        # Keep large JSON payloads out of temporary sorting. The composite
+        # index already orders each unit's candidates; compare one winner at
+        # a time while scanning the original table through that index.
         expected = self._db.execute(
-            "WITH ranked AS (SELECT unit_id,job_id,completed_at,scope_digest,item_json, "
-            "ROW_NUMBER() OVER (PARTITION BY unit_id ORDER BY completed_at DESC,job_id DESC) AS rank "
-            "FROM items) SELECT unit_id,job_id,completed_at,scope_digest,item_json "
-            "FROM ranked WHERE rank=1 ORDER BY unit_id"
+            "SELECT i.unit_id,i.job_id,i.completed_at,i.scope_digest,i.item_json "
+            "FROM items i INDEXED BY items_unit_latest "
+            "WHERE i.job_id=(SELECT candidate.job_id FROM items candidate "
+            "WHERE candidate.unit_id=i.unit_id "
+            "ORDER BY candidate.completed_at DESC,candidate.job_id DESC LIMIT 1) "
+            "ORDER BY i.unit_id"
         )
         actual = self._db.execute(
             "SELECT unit_id,job_id,completed_at,scope_digest,item_json FROM latest ORDER BY unit_id"
@@ -273,12 +278,14 @@ class HistoryCatalog:
         total = self._generation_meta("history_total")
         if total != expected_count:
             raise HistoryCatalogError("历史目录历史总数与最新项目不一致")
-        expected_assets=self._db.execute("""WITH ranked AS (
-            SELECT f.blake3,f.size_bytes,f.job_id,f.unit_id,
-            ROW_NUMBER() OVER(PARTITION BY f.blake3,f.size_bytes
-            ORDER BY i.completed_at DESC,i.job_id DESC,i.unit_id DESC) AS rank
-            FROM fingerprints f JOIN items i ON i.job_id=f.job_id AND i.unit_id=f.unit_id)
-            SELECT blake3,size_bytes,job_id,unit_id FROM ranked WHERE rank=1 ORDER BY blake3,size_bytes""")
+        expected_assets=self._db.execute("""SELECT f.blake3,f.size_bytes,f.job_id,f.unit_id
+            FROM fingerprints f INDEXED BY fingerprints_content
+            WHERE (f.job_id,f.unit_id)=(
+                SELECT i.job_id,i.unit_id FROM fingerprints candidate JOIN items i
+                ON i.job_id=candidate.job_id AND i.unit_id=candidate.unit_id
+                WHERE candidate.blake3=f.blake3 AND candidate.size_bytes=f.size_bytes
+                ORDER BY i.completed_at DESC,i.job_id DESC,i.unit_id DESC LIMIT 1)
+            ORDER BY f.blake3,f.size_bytes""")
         actual_assets=self._db.execute('SELECT blake3,size_bytes,job_id,unit_id FROM asset_latest ORDER BY blake3,size_bytes')
         for expected_row,actual_row in zip_longest(expected_assets,actual_assets):
             if expected_row != actual_row:

@@ -60,6 +60,21 @@ class QueueLifecycleTests(unittest.TestCase):
             self.assertEqual(q.tick(self.provider)['jobs'],[])
             self.assertEqual(q.history_page()['jobs'][0]['state'],'closed')
 
+    def test_handoff_addition_and_renewal_keep_existing_media_tokens_and_models(self):
+        with self.open(enabled=False) as q:
+            status=q.tick(self.provider)
+            self.assertEqual(status['jobs'][0]['state'],'awaiting_confirmation')
+            token=status['jobs'][0]['token'];artifact=status['jobs'][0]['artifact']
+        self.confirmed();self.rows[0]['archive_handoff']['status']='partial'
+        with self.open() as q:
+            for expiry in ('2000-01-01T00:00:00+00:00','2099-01-01T00:00:00+00:00'):
+                self.rows[0]['archive_handoff']['expires_at']=expiry
+                with patch('muli_sorter.discovery_queue.build_job',side_effect=AssertionError('old media reclassified')):
+                    status=q.tick(self.provider)
+                self.assertEqual(status['jobs'][0]['state'],'awaiting_confirmation')
+                self.assertEqual(status['jobs'][0]['token'],token)
+                self.assertEqual(status['jobs'][0]['artifact'],artifact)
+
     def test_partial_batch_remains_active_and_cancellation_persists_without_deletion(self):
         self.confirmed();self.rows[0]['archive_handoff']['status']='partial'
         with self.open() as q:

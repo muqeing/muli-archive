@@ -1,5 +1,6 @@
 ## 0.17.0 — 2026-10-16
 
+- Keep startup history validation within small temporary files by streaming indexed winners; workflow handoff renewal does not invalidate existing media evidence tokens or requeue old classifications.
 - Add opt-in durable classification closure from a fresh complete revision-bound archive handoff; retired models leave the active queue, partial work stays active, new revisions remain discoverable.
 - Add explicit classification cancellation and query-only paged history CLI; neither operation deletes media or cancels archive execution.
 - Freeze legacy reservation identity with persistent filesystem ID plus inode, preserving NAS reboot compatibility without weakening replacement checks.

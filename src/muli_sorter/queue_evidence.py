@@ -65,7 +65,11 @@ def signal_parts(staging, batch_ids, snapshot, *, allow_examples=False):
             attrs.append(['photo_time_correction', photo_receipt])
         if candidate is not None:
             attrs.append(['postcopy_receipt', candidate['receipt_signature']])
-        values[bid] = digest([row, digest(receipt.hex()), attrs])
+        # Workflow acknowledgements expire/renew independently of media. Keep
+        # the exact pre-lifecycle evidence token; a handoff refresh must not
+        # requeue completed classifications or invalidate a running worker.
+        evidence_row = {k:v for k,v in row.items() if k != 'archive_handoff'}
+        values[bid] = digest([evidence_row, digest(receipt.hex()), attrs])
     return values
 
 

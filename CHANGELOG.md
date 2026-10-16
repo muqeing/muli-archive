@@ -1,4 +1,5 @@
 ## 0.17.0 — 2026-10-16
+- NAS phase-one read-only acceptance completed with exact role installation hashes, desktop/mobile pagination and CLI checks; initial failures and recovery remain documented. No media or retention deletion acceptance.
 
 - Accept multiple current copies of a historical origin in the browser summary; reuse metadata-bound original projections for display while execution reads remain strict.
 - Keep startup history validation within small temporary files by streaming indexed winners; workflow handoff renewal does not invalidate existing media evidence tokens or requeue old classifications.

@@ -14,6 +14,23 @@ class ProjectionTests(Fixture, unittest.TestCase):
         self.service.run_job(job['job_id'])
         return self.service.history.snapshot(self.model)
 
+    def test_browser_summary_accepts_multiple_current_copies_of_one_history_origin(self):
+        import subprocess
+        from pathlib import Path
+        import muli_sorter
+        source=(Path(muli_sorter.__file__).parent/'review_ui.js').read_text()
+        functions=source[source.index('  function archiveUnitId('):source.index('  function isArchivedUnit(')]
+        script="const assert=require('assert/strict');const model={report_id:'test'};const unitById={a:{},b:{}};"+functions+"""
+        const data={version:'archive-summary/1',report_id:'test',archived_unit_ids:['a','b'],
+            current_files:2,history_total:1,history_generation:'1',warnings:[]};
+        const result=archiveDataSafe(data);assert(result);assert.equal(result.archived_units.length,2);
+        assert.equal(result.history_total,1);
+        assert.equal(archiveDataSafe({...data,history_total:-1}),null);
+        assert.equal(archiveDataSafe({...data,archived_unit_ids:['a','a']}),null);
+        assert.equal(archiveDataSafe({...data,archived_unit_ids:['a','unknown']}),null);
+        """
+        subprocess.run(['node','-e',script],check=True,capture_output=True,text=True)
+
     def test_only_receipt_backed_units_lose_detail_and_full_plan_stays_required(self):
         before = deepcopy(self.model)
         archive = self.complete()

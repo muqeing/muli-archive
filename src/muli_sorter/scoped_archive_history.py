@@ -145,7 +145,7 @@ class ScopedArchiveHistory:
         wanted={**self.catalog.matching_scopes(current,fingerprints),**current}
         paths=self._job_paths(ids)
         result=self.legacy._snapshot(report_id,wanted,selected_only=True,job_paths=paths,
-                                     include_external=False)
+                                     include_external=False,allow_cached_projection=display)
         # External receipt validation is scoped by unit ID. It never grants
         # completion to an unrelated old destination.
         external_ids=set(self.catalog.get_meta('external',[])) & ids

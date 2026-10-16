@@ -40,6 +40,27 @@ class ScopedHistoryTests(baseline.Fixture, unittest.TestCase):
         self.assertEqual(len(current['archived_units']),1)
         self.assertTrue(current['warnings'])
 
+    def test_presentation_reuses_original_projection_but_execution_reads_receipts(self):
+        done=self.complete();history=self.service.history
+        # Synchronize once to bind the original index to receipt/journal metadata.
+        history.snapshot(self.model)
+        original=history.legacy.read
+        def no_receipt(path):
+            if path.name.startswith('receipt-'):
+                raise AssertionError('unchanged display reopened original receipt')
+            return original(path)
+        with patch.object(history.legacy,'read',side_effect=no_receipt):
+            self.assertEqual(len(history.snapshot(self.model)['archived_units']),2)
+        with patch.object(history.legacy,'read',wraps=original) as reader:
+            state=history.for_units(self.model,{self.model['units'][0]['unit_id']})
+        self.assertEqual(len(state['archived_units']),1)
+        self.assertTrue(any(c.args[0].name.startswith('receipt-') for c in reader.call_args_list))
+        # Invalidating any dependency prevents reuse, so changed proofs still
+        # fall back to the selected original receipt validation path.
+        receipt=self.service.state/'units'/done['outcomes'][0]['receipt']
+        receipt.write_text('{}')
+        self.assertEqual(len(history.snapshot(self.model)['archived_units']),1)
+
     def test_completed_history_stays_cold_when_current_model_has_no_old_units(self):
         self.complete();history=self.service.history
         history.snapshot(self.model)
@@ -65,7 +86,7 @@ class ScopedHistoryTests(baseline.Fixture, unittest.TestCase):
         self.assertEqual(state['archived_units'][0]['unit_id'],'new-card-copy')
         self.assertTrue(state['archived_units'][0].get('content_copy_of'))
         read_receipts=[c.args[0] for c in reader.call_args_list if c.args[0].name.startswith('receipt-')]
-        self.assertEqual(len(read_receipts),1,read_receipts)
+        self.assertLessEqual(len(read_receipts),1,read_receipts)
         self.assertEqual(expected,digest(unit['files']))
 
     def test_requires_explicit_offline_initialization(self):

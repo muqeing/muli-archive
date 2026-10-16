@@ -273,7 +273,7 @@
       if (!Array.isArray(data.archived_unit_ids) || new Set(data.archived_unit_ids).size !== data.archived_unit_ids.length ||
           data.archived_unit_ids.some(function (id) { return typeof id !== "string" || !unitById[id]; }) ||
           !Number.isInteger(data.current_files) || data.current_files < data.archived_unit_ids.length ||
-          !Number.isInteger(data.history_total) || data.history_total < data.archived_unit_ids.length ||
+          !Number.isInteger(data.history_total) || data.history_total < 0 ||
           typeof data.history_generation !== "string" || !data.history_generation) return null;
       var parentProjects = data.parent_projects || {};
       if (typeof parentProjects !== "object" || Array.isArray(parentProjects)) return null;

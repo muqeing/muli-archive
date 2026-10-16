@@ -1,5 +1,6 @@
 ## 0.17.0 — 2026-10-16
 
+- Accept multiple current copies of a historical origin in the browser summary; reuse metadata-bound original projections for display while execution reads remain strict.
 - Keep startup history validation within small temporary files by streaming indexed winners; workflow handoff renewal does not invalidate existing media evidence tokens or requeue old classifications.
 - Add opt-in durable classification closure from a fresh complete revision-bound archive handoff; retired models leave the active queue, partial work stays active, new revisions remain discoverable.
 - Add explicit classification cancellation and query-only paged history CLI; neither operation deletes media or cancels archive execution.

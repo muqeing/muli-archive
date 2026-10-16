@@ -153,7 +153,7 @@ class ArchiveHistory:
                        for u in model['units'] if u['unit_id'] in unit_ids}
             return self._snapshot(model['report_id'], current, selected_only=True)
 
-    def _snapshot(self, report_id, current, selected_only=False, *, job_paths=None, include_external=True, collector=None):
+    def _snapshot(self, report_id, current, selected_only=False, *, job_paths=None, include_external=True, collector=None, allow_cached_projection=False):
         archived, warnings, move_contexts = {}, [], {}
         retained_projections = []
         # Reuse a completed job's compact projection only while every receipt
@@ -171,10 +171,14 @@ class ArchiveHistory:
                     retained_projections.append(retained['projection'])
                 continue
             self.retained_projected.pop(path, None)
-            cached = None if selected_only else self.projected.get(path)
+            # Presentation may reuse the original projection only while every
+            # source receipt/journal still has the same inode/size/mtime/ctime.
+            # Execution-scoped reads retain the strict selected-only path.
+            use_projection = not selected_only or allow_cached_projection
+            cached = self.projected.get(path) if use_projection else None
             if cached is not None and not self._unchanged(cached['dependencies']):
                 cached = None
-            if cached is None and not selected_only:
+            if cached is None and use_projection:
                 # A restart or an evicted entry reloads the compact index
                 # instead of reopening every receipt of that job again.
                 cached = self._load_index(path)

@@ -15,6 +15,9 @@ from .archive_target_metadata import MetadataProofCache, check_target
 from .intake import _open, validate_record, resolve_files, read_bytes
 from .order_feed_io import atomic_json, read_json
 from .review import digest
+from .handoff_source_evidence import matches as source_evidence_matches
+from .postcopy_receipt import receipt_signature as postcopy_signature
+from .handoff_request_binding import matches as request_binding_matches
 
 
 class FeedbackDeferred(Exception):
@@ -65,6 +68,7 @@ class ArchiveHandoff:
         self.stop = threading.Event(); self.thread = None
         self.target_metadata_proofs = MetadataProofCache()
         self.checked = {}; self.statuses = {}; self.lock = threading.Lock()
+        self.request_bindings = {}
 
     def roots(self):
         if [wire.identity(p) for p in (self.outbox, self.acks)] != self.identities:
@@ -92,6 +96,7 @@ class ArchiveHandoff:
         if not plans or len(plans) != job['summary']['total_files']:
             raise ValueError('invalid_file_plan')
         records = {}; content_digests = {}; raw_bindings = {}; mapping = {}; seen = set(); dependencies = {}
+        reader_proofs = {}; rebound_readers = {}; request_bound = None
 
         def record(path):
             before = wire.signature(path.lstat())
@@ -100,6 +105,29 @@ class ArchiveHandoff:
                 raise ValueError('archive_record_changed')
             dependencies[path] = before
             return result
+
+        def bind_original_request():
+            nonlocal request_bound
+            if request_bound is None:
+                path = self.service.state/'requests'/('request-'+job_id+'.json')
+                before = wire.signature(path.lstat())
+                key = (tuple(token), tuple(before), job['request_digest'], digest(self.service.identity))
+                request_bound = self.request_bindings.get(job_id) == key
+                if not request_bound:
+                    request_bound = (
+                        self.service.identity.get('identity_scheme') == 'fsid-inode/v1' and
+                        request_binding_matches(path, request_digest=job['request_digest'], job_id=job_id,
+                                                roots=self.service.identity, file_plans=plans))
+                if wire.signature(path.lstat()) != before:
+                    raise ValueError('archive_record_changed')
+                if request_bound:
+                    self.request_bindings.pop(job_id, None)
+                    self.request_bindings[job_id] = key
+                    while len(self.request_bindings) > 256:
+                        self.request_bindings.pop(next(iter(self.request_bindings)))
+                dependencies[path] = before
+            if not request_bound:
+                raise ValueError('invalid_job_binding')
 
         def manifest(bid):
             if bid not in records:
@@ -148,8 +176,12 @@ class ArchiveHandoff:
                 raise ValueError('receipt_identity_mismatch')
             for bid,evidence in receipt['source_evidence'].items():
                 m = manifest(bid)
-                if m['manifest_id'] != evidence['manifest_id'] or content_digests[bid] != evidence['content_digest']:
+                if content_digests[bid] != evidence['content_digest']:
+                    bind_original_request()
+                if not source_evidence_matches(m, evidence, current_digest=content_digests[bid], cache=reader_proofs):
                     raise ValueError('source_manifest_changed')
+                if content_digests[bid] != evidence['content_digest']:
+                    rebound_readers[bid] = m['_postcopy_evidence']['receipt_signature']
             for row in rows:
                 self.checkpoint()
                 path = row['source_path']; plan = plans.get(path)
@@ -235,6 +267,9 @@ class ArchiveHandoff:
         if not batches:
             raise ValueError('no_manifest_coverage')
         self.roots()
+        if any(postcopy_signature(self.service.staging, bid) != expected
+               for bid, expected in rebound_readers.items()):
+            raise ValueError('records_changed_during_feedback')
         if token != wire.signature(job_path.lstat()) or any(wire.signature(p.lstat())!=v for p,v in dependencies.items()):
             raise ValueError('records_changed_during_feedback')
         return {'schema':wire.SCHEMA,'job_id':job_id,'request_digest':job['request_digest'],
@@ -301,16 +336,36 @@ class ArchiveHandoff:
         except OSError:
             pass  # Feedback reporting never breaks an archive job.
 
-    def revoked_for(self, batches):
+    def revoked_for(self, batches, *, confirmed_at=None):
         try:
             stored = read_json(self.revocation_path())
         except (OSError, ValueError, KeyError):
             return {}
         if not isinstance(stored, dict):
             return {}
-        return {row['batch_uid']: stored[row['batch_uid']]
-                for row in (batches or [])
-                if isinstance(row, dict) and row.get('batch_uid') in stored}
+        result = {}
+        for row in batches or []:
+            if not isinstance(row, dict) or row.get('batch_uid') not in stored:
+                continue
+            previous = stored[row['batch_uid']]
+            if not isinstance(previous, dict):
+                result[row['batch_uid']] = previous
+                continue
+            try:
+                # A newer, fully confirmed consumer acknowledgement resolves
+                # the active warning. Keep the original revocation on disk as
+                # audit history; a partial/expired/newer failure stays visible.
+                total = row.get('total_file_count')
+                if (row.get('status') == 'confirmed' and type(total) is int and total > 0 and
+                        type(row.get('confirmed_file_count')) is int and row['confirmed_file_count'] == total and
+                        type(row.get('missing_file_count')) is int and row['missing_file_count'] == 0 and
+                        row.get('batch_id') == previous.get('batch_id') and confirmed_at is not None and
+                        wire.timestamp(previous['at']) < wire.timestamp(confirmed_at) <= time.time()+5):
+                    continue
+            except (ValueError, TypeError, KeyError):
+                pass
+            result[row['batch_uid']] = previous
+        return result
 
     def status(self, job_id, completed_at=None):
         # The console already has the compact job summary.  Use its completion
@@ -335,7 +390,7 @@ class ArchiveHandoff:
             if (ack.get('schema') == 'muli-archive-handoff-ack/1' and ack.get('job_id') == job_id
                     and ack.get('event_id') == state.get('event_id') and wire.timestamp(ack['expires_at'])>time.time()):
                 result = {'status':ack['status'],'checked_at':ack['checked_at'],'batches':ack['batches']}
-                revoked = self.revoked_for(ack['batches'])
+                revoked = self.revoked_for(ack['batches'], confirmed_at=ack['checked_at'] if ack['status']=='synced' else None)
                 if revoked:
                     result['revoked_batches'] = revoked
                 return result

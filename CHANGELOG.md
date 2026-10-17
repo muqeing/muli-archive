@@ -1,4 +1,6 @@
 ## 0.17.0 — 2026-10-16
+- Restore completed-job feedback after a receipt reader device number changes. Bind the exact original request, persistent roots and file plans; accept only the three transient reader fields when the projected full manifest digest matches. Preserve source admission, target verification and unverified-copy protections.
+- Stream original request binding with bounded buffers and cache metadata only; avoid decoding historical page models. Suppress an old active revocation warning only after a newer fully confirmed consumer acknowledgement; retain the audit history and partial warnings.
 - Enforce the four opened-page snapshot limit inside the cache itself, including background page builds. Reopening an identity refreshes its place; failed serialization preserves existing snapshots. No change to media checks, tickets, execution or retention cleanup.
 - NAS phase-one read-only acceptance completed with exact role installation hashes, desktop/mobile pagination and CLI checks; initial failures and recovery remain documented. No media or retention deletion acceptance.
 

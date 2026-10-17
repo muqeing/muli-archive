@@ -78,6 +78,48 @@ class RevocationStoreTests(unittest.TestCase):
         (self.service.state / REVOCATIONS_NAME).write_text('{ not json')
         self.assertEqual(self.worker.revoked_for([{'batch_uid': 'uid-038'}]), {})
 
+    def confirmed_row(self):
+        return {'batch_uid':'uid-038','batch_id':'BATCH_20261007_000038','status':'confirmed',
+                'total_file_count':5,'confirmed_file_count':5,'missing_file_count':0}
+
+    def test_new_complete_ack_hides_active_warning_but_preserves_audit(self):
+        from muli_sorter.handoff_protocol import iso
+        now=time.time();self.worker.record_revocations('job-1',self.previous(),'old',now-10)
+        p=self.service.state/REVOCATIONS_NAME;before=p.read_bytes()
+        self.assertEqual(self.worker.revoked_for([self.confirmed_row()],confirmed_at=iso(now)),{})
+        self.assertEqual(p.read_bytes(),before)
+        self.assertTrue(self.worker.revoked_for([self.confirmed_row()]))
+
+    def test_partial_counts_or_unknown_status_cannot_hide_warning(self):
+        from muli_sorter.handoff_protocol import iso
+        now=time.time();self.worker.record_revocations('job-1',self.previous(),'old',now-10)
+        for field,value in [('status','partial'),('confirmed_file_count',4),('missing_file_count',1),
+                            ('total_file_count',0),('missing_file_count',False),('batch_id','another')]:
+            with self.subTest(field=field):
+                row=self.confirmed_row();row[field]=value
+                self.assertTrue(self.worker.revoked_for([row],confirmed_at=iso(now)))
+
+    def test_old_or_future_ack_cannot_hide_warning(self):
+        from muli_sorter.handoff_protocol import iso
+        now=time.time();self.worker.record_revocations('job-1',self.previous(),'old',now-10)
+        for stamp in (now-20,now+60):
+            self.assertTrue(self.worker.revoked_for([self.confirmed_row()],confirmed_at=iso(stamp)))
+
+    def test_new_failure_after_ack_remains_visible(self):
+        from muli_sorter.handoff_protocol import iso
+        now=time.time();self.worker.record_revocations('job-2',self.previous(),'new',now)
+        result=self.worker.revoked_for([self.confirmed_row()],confirmed_at=iso(now-1))
+        self.assertEqual(result['uid-038']['job_id'],'job-2')
+
+    def test_invalid_timestamps_keep_warning(self):
+        now=time.time();self.worker.record_revocations('job-1',self.previous(),'old',now-10)
+        self.assertTrue(self.worker.revoked_for([self.confirmed_row()],confirmed_at='invalid'))
+
+    def test_malformed_per_batch_audit_value_does_not_crash(self):
+        import json
+        p=self.service.state/REVOCATIONS_NAME;p.write_text(json.dumps({'uid-038':'unknown'}))
+        self.assertEqual(self.worker.revoked_for([self.confirmed_row()],confirmed_at='invalid'),{'uid-038':'unknown'})
+
 
 if __name__ == '__main__':
     unittest.main()

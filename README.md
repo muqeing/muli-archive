@@ -669,3 +669,11 @@ scoped-read-submit-4 已于 2026-10-06 上线。归档与分类两镜像已切�
 模型JSON与截图HTML分开发布缓存；截图更新不重写同一模型，大于64MiB的已生成报告按块比较已有输出，不改变外部摄入证据的64MiB读取上限。半成品、丢失和篡改仍修复。已更新分类与归档镜像，分类1GiB、归档2GiB与其他四服务实例及配置保持。未执行真实素材归档或性能测试。验证与状态以本次输出目录manifest和本地验收为准。
 
 690本地、分类41与归档266项NAS隔离检查通过，无跳过；分类95/归档96安装文件分别精确匹配各自底包加9模块覆盖。正式1440/390页面GET验收通过，ready、无横向溢出或脚本异常，刷新提示约1秒消失。任务/请求/提交控制及旧来源保留保护保持，未执行真实预检/提交/重试/移动/删除或媒体性能测试。首次preintent读取历史逐文件意图过慢，确认尚未切换后修正部署保护读取范围；分类初次发布期间健康心跳过期，未重启，发布完成后恢复healthy/restart0/无OOM。两项历史过程保留，不宣称长期稳定性已测。
+
+### Completed archive feedback and receipt reader identity
+
+Completed-job feedback can survive a change in the receipt reader's temporary device number. The original canonical request SHA, persistent filesystem roots, file plans and complete archived manifest evidence must still bind exactly; only three receipt-reader device fields can be projected back. Receipt bytes/inodes/timestamps, source admission, destination checks and retained-copy protections remain strict.
+
+Request binding reads a bounded stream and caches metadata only, avoiding historical page-model decoding. A newer complete consumer acknowledgement can resolve an old active revocation warning while retaining its audit record; partial or changed evidence remains visible. This does not start archive jobs or delete media. Code/CLI distribution validation and NAS feedback recovery are separate acceptance steps.
+
+The maintenance candidate passed 845 local checks and 499 isolated Linux archive checks without skips. NAS readback matched all 106 installed files, retained the other five service instances and existing resource settings, and passed desktop/mobile GET and installed CLI checks. Background feedback recovery is incremental; successful deployment does not certify every historical batch or authorize media cleanup.

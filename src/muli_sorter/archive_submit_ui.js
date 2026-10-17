@@ -273,7 +273,7 @@
     return Number.isInteger(number) && number >= 0 ? String(number) : "—";
   }
   function archiveHandoffView(value, jobStatus) {
-    var labels = { disabled: "批次反馈未启用", pending: "批次反馈待同步", synced: "批次反馈已同步", needs_review: "批次反馈需要核对", not_included: "历史任务未自动回填" };
+    var labels = { disabled: "批次反馈未启用", pending: "批次反馈待同步", synced: "批次反馈已同步", recorded: "归档完成记录已保存", needs_review: "批次反馈需要核对", not_included: "历史任务未自动回填" };
     if (!value || typeof value !== "object" || Array.isArray(value)) {
       if (jobStatus === "queued" || jobStatus === "running") {
         return { key: "pending", label: "归档完成后同步批次反馈", note: "当前归档尚未完成，暂不生成批次反馈。", batches: [] };
@@ -288,6 +288,7 @@
       disabled: "当前归档服务未启用批次反馈。",
       pending: "后台尚未完成批次反馈同步。",
       synced: "已反馈到拷贝系统，各批次进度如下。",
+      recorded: "已保存本任务完成记录，不再定期重新核对。记录不代表当前目标健康，也不是删除或格式化许可。",
       needs_review: "反馈状态需要核对，不能推断批次已完成转存。",
       not_included: "该任务早于批次反馈启用时间，未自动回填；不能据此判断已转存。"
     };
@@ -354,7 +355,7 @@
   }
   function renderArchiveHandoff(job) {
     var view = archiveHandoffView(job && job.archive_handoff, job && job.status);
-    var box = make("div", "archive-submit-handoff " + (view.key === "synced" ? "notice success" : "warning-box"));
+    var box = make("div", "archive-submit-handoff " + ((view.key === "synced" || view.key === "recorded") ? "notice success" : "warning-box"));
     box.style.minWidth = "0";
     box.style.maxWidth = "100%";
     box.style.overflowWrap = "anywhere";

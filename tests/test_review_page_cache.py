@@ -173,6 +173,41 @@ class ReviewPageCacheTests(unittest.TestCase):
         wait_until(lambda: cache.get_bundle() is not None)
         self.assertEqual(cache.read()[1], b"2")
 
+    def test_current_valid_bundle_survives_failed_build_for_transient_other_key(self):
+        key = ['current']
+        def build(phase):
+            if key[0] == 'transient':
+                raise ValueError('temporary build failure')
+            return self.bundle('current page')
+        cache = ReviewPageCache(build, lambda: key[0], ttl=None)
+        self.addCleanup(cache.shutdown)
+        cache.read(); wait_until(lambda: cache._state == 'ready')
+        key[0] = 'transient'; cache.read(); wait_until(lambda: cache._state == 'failed')
+        self.assertEqual(cache.status()['status'], 'failed')
+        self.assertEqual(cache.status()['ready_generation'], 0)
+        key[0] = 'current'
+        self.assertEqual(cache.read()[0], 200)
+        self.assertIsNotNone(cache.get_bundle())
+        self.assertEqual(cache.status()['status'], 'ready')
+        self.assertEqual(cache.status()['background_status'], 'failed')
+        self.assertEqual(cache._failure['error'], 'temporary build failure')
+
+    def test_expired_bundle_is_not_reported_ready_after_transient_failure(self):
+        clock = FakeClock(); key = ['current']
+        def build(phase):
+            if key[0] == 'transient':
+                raise ValueError('temporary build failure')
+            return self.bundle()
+        cache = ReviewPageCache(build, lambda: key[0], ttl=5, clock=clock)
+        self.addCleanup(cache.shutdown)
+        cache.read(); wait_until(lambda: cache._state == 'ready')
+        key[0] = 'transient'; cache.read(); wait_until(lambda: cache._state == 'failed')
+        key[0] = 'current'; clock.advance(6)
+        self.assertIsNone(cache.get_bundle())
+        self.assertEqual(cache.status()['status'], 'failed')
+        cache.invalidate()
+        self.assertNotEqual(cache.status()['status'], 'ready')
+
     def test_mismatched_bundle_report_is_not_published(self):
         bundle = self.bundle()
         bundle['archive_state']['report_id'] = 'other'

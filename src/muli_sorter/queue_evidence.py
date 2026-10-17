@@ -61,7 +61,7 @@ def _signal_part(staging, bid, row, candidate):
     # Workflow acknowledgements expire/renew independently of media. Keep
     # the exact pre-lifecycle evidence token; a handoff refresh must not
     # requeue completed classifications or invalidate a running worker.
-    evidence_row = {k:v for k,v in row.items() if k != 'archive_handoff'}
+    evidence_row = {k:v for k,v in row.items() if k not in ('archive_handoff', 'archive_completion')}
     return digest([evidence_row, digest(receipt.hex()), attrs])
 
 

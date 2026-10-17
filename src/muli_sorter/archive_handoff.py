@@ -6,6 +6,7 @@ from the already durable completed job. The archive worker never waits here.
 """
 import os
 from pathlib import Path
+import sqlite3
 import threading
 import time
 from blake3 import blake3
@@ -58,7 +59,7 @@ def revocation_reason(exc):
 
 
 class ArchiveHandoff:
-    def __init__(self, service, outbox, acknowledgements, since, *, idle=lambda: True):
+    def __init__(self, service, outbox, acknowledgements, since, *, idle=lambda: True, completion_facts=False):
         self.service = service
         self.outbox, self.acks = Path(outbox), Path(acknowledgements)
         wire.separate_channels((self.outbox,self.acks),(service.staging,service.projects,service.state))
@@ -69,6 +70,11 @@ class ArchiveHandoff:
         self.target_metadata_proofs = MetadataProofCache()
         self.checked = {}; self.statuses = {}; self.lock = threading.Lock()
         self.request_bindings = {}
+        self.completion_error = None
+        self.completion_workflow = None
+        if completion_facts:
+            from .completion_exchange import initialize
+            initialize(self)
 
     def roots(self):
         if [wire.identity(p) for p in (self.outbox, self.acks)] != self.identities:
@@ -367,7 +373,29 @@ class ArchiveHandoff:
             result[row['batch_uid']] = previous
         return result
 
+    def notify(self, job):
+        if self.completion_workflow is not None:
+            if job.get('status') == 'completed' and wire.timestamp(job.get('completed_at', wire.iso(0))) < self.completion_workflow.activation:
+                return
+            try:
+                self.completion_workflow.register(job)
+            except (OSError, ValueError, KeyError, TypeError, sqlite3.Error) as exc:
+                self.completion_error = type(exc).__name__
+                raise
+
+    def feedback_health(self):
+        reason = self.completion_error
+        if self.thread is not None and not self.thread.is_alive() and not self.stop.is_set():
+            reason = reason or 'worker_stopped'
+        return {'mode': 'permanent_completion' if self.completion_workflow is not None else 'legacy_lease',
+                'state': 'needs_review' if reason else 'active',
+                'reason': reason}
+
     def status(self, job_id, completed_at=None):
+        if self.completion_error:
+            return {'status': 'needs_review', 'batches': [], 'reason': self.completion_error}
+        if self.completion_workflow is not None:
+            return self.completion_workflow.status(job_id)
         # The console already has the compact job summary.  Use its completion
         # timestamp to exclude pre-activation jobs without reopening a large
         # durable job record or manufacturing a pending state for them.
@@ -400,6 +428,11 @@ class ArchiveHandoff:
 
     def tick(self, clock=None):
         clock = time.time() if clock is None else clock
+        if self.completion_workflow is not None:
+            if self.completion_error:
+                raise ValueError('completion_worker_requires_review')
+            from .completion_exchange import tick
+            return tick(self, clock)
         if not self.idle():
             return
         self.roots()
@@ -435,8 +468,11 @@ class ArchiveHandoff:
             while not self.stop.wait(10):
                 try:
                     self.tick()
-                except (OSError,ValueError,KeyError,TypeError):
-                    pass  # Feedback cannot terminate or change archive work.
+                except (OSError,ValueError,KeyError,TypeError,sqlite3.Error) as exc:
+                    if self.completion_workflow is not None:
+                        self.completion_error = type(exc).__name__
+                        return  # Explicit unresolved control failure; do not retry.
+                    pass  # Legacy compatibility; never terminates archive work.
         self.thread=threading.Thread(target=loop,name='archive-handoff',daemon=True);self.thread.start()
 
     def close(self):
@@ -445,3 +481,6 @@ class ArchiveHandoff:
             self.thread.join(timeout=30)
             if self.thread.is_alive():
                 raise RuntimeError('handoff_worker_still_running')
+        if self.completion_workflow is not None:
+            self.completion_workflow.close()
+            self.completion_workflow = None

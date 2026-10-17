@@ -1,3 +1,10 @@
+## 0.19.0 — 2026-10-18
+
+- Add explicitly enabled historical completion facts and exact revision-bound, transactional acknowledgements. Keep all current cleanup permissions separate and expiring.
+- Consume only persisted pending work; retain immutable facts and stop renewing recorded tasks. Recover lost acknowledgements without replaying media operations; isolate failed feedback.
+- Close classification only after complete current-revision coverage. Preserve default v1 exchange and exclude historical tasks from implicit migration.
+- Keep CLI/source versions aligned. NAS classifier/archive/ingest role checks passed 125/573/105 tests without skips; exact installed files and unchanged original business controls were read back. Preserve the fixture-repair and clean-shutdown checkpoint history. No history backfill or real new archive operation was performed; sustained throughput, memory and faster historical-index startup remain unverified.
+
 ## 0.18.1 — 2026-10-17
 
 - Reuse compact, bounded classification evidence hints only when all control paths, batch versions and correction receipts are unchanged. Keep original signal identities and fresh archive/build admission validation. No raw manifest or receipt body is retained in the discovery cache.

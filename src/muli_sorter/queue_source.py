@@ -19,11 +19,19 @@ def snapshot_sql(include_handoff=False):
     fields = ('status', 'revision', 'confirmed_file_count', 'total_file_count',
               'missing_file_count', 'checked_at', 'expires_at', 'source_disposition')
     extra = ','.join(repr(k) + ",json_extract(data,'$.archive_handoff." + k + "')" for k in fields)
-    return SQL.replace(' FROM objects', ",json_object(" + extra + ") AS archive_handoff FROM objects")
+    fact_fields = ('schema', 'status', 'batch_uid', 'batch_id', 'revision', 'total_file_count',
+                   'confirmed_file_count', 'missing_file_count', 'historical_only', 'operation_authorized')
+    def expression(k):
+        path = '$.archive_completion.' + k
+        if k in ('historical_only', 'operation_authorized'):
+            return "json(CASE json_type(data,'" + path + "') WHEN 'true' THEN 'true' WHEN 'false' THEN 'false' ELSE 'null' END)"
+        return "json_extract(data,'" + path + "')"
+    fact = ','.join(repr(k) + ',' + expression(k) for k in fact_fields)
+    return SQL.replace(' FROM objects', ",json_object(" + extra + ") AS archive_handoff,json_object(" + fact + ") AS archive_completion FROM objects")
 
 
 def snapshot_rows(rows):
-    return [{k: (json.loads(v) if k == 'archive_handoff' else v)
+    return [{k: (json.loads(v) if k in ('archive_handoff', 'archive_completion') else v)
              for k, v in dict(row).items()} for row in rows]
 
 
@@ -95,7 +103,7 @@ c=sqlite3.connect(Path({database!r}).as_uri()+'?mode=ro',uri=True,timeout=1)
 c.execute('PRAGMA query_only=ON')
 c.row_factory=sqlite3.Row
 rows=c.execute({snapshot_sql(include_handoff)!r}).fetchall()
-print(json.dumps({{'generated_at':started,'complete_listing':True,'source':'ingest_ssh_sqlite_readonly','batches':[{{k:(json.loads(v) if k=='archive_handoff' else v) for k,v in dict(r).items()}} for r in rows]}}))
+print(json.dumps({{'generated_at':started,'complete_listing':True,'source':'ingest_ssh_sqlite_readonly','batches':[{{k:(json.loads(v) if k in ('archive_handoff','archive_completion') else v) for k,v in dict(r).items()}} for r in rows]}}))
 c.close()
 '''
     result = subprocess.run(['ssh','-o','BatchMode=yes','-o','StrictHostKeyChecking=yes',

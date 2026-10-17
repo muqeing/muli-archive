@@ -197,6 +197,13 @@ def configuration(path):
     if cfg.get('schema')!='muli-handoff-channel/1' or cfg.get('include_history') is not False:
         raise ValueError('unsupported_handoff_configuration')
     timestamp(cfg['since'])
+    if type(cfg.get('completion_facts', False)) is not bool:
+        raise ValueError('invalid_completion_facts_configuration')
+    mode = os.environ.get('MULI_COMPLETION_FACTS')
+    if mode is not None:
+        if mode not in ('0', '1'):
+            raise ValueError('invalid_completion_facts_mode')
+        cfg['completion_facts'] = mode == '1'
     paths=[Path(cfg[k]) for k in ('outbox','acknowledgements')]
     if any(not p.is_absolute() for p in paths) or paths[0]==paths[1] or any(a in b.parents for a,b in ((paths[0],paths[1]),(paths[1],paths[0]))):
         raise ValueError('overlapping_handoff_directories')

@@ -235,6 +235,9 @@ class ArchiveJobs:
 
     def _save(self, job):
         job['updated_at'] = now()
+        worker = getattr(self, 'handoff', None)
+        if worker is not None:
+            worker.notify(job)
         self.save_control(self._job_path(job['job_id']), job)
 
     def list_jobs(self, *, summary=False):

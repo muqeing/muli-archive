@@ -277,7 +277,14 @@ class ReviewPageCache:
         with self._lock:
             ready = self._ready
             valid = ready is not None and self._same(ready['key'], key)
-            return {'status': self._state, 'requires_reload': ready is not None and not valid,
+            available = (not self._closed and valid and
+                         (self.ttl is None or self._now() - ready['built_at'] <= self.ttl))
+            # A failed build for another transient key must not contradict a
+            # still-current, unexpired bundle that read()/get_bundle() accept.
+            # Keep the background state and failure evidence for diagnostics.
+            return {'status': 'ready' if available else self._state,
+                    'background_status': self._state,
+                    'requires_reload': ready is not None and not valid,
                     'ready_generation': ready['generation'] if valid else 0}
 
     def get_display_bundle(self) -> Any | None:

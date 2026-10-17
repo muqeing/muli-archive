@@ -66,7 +66,7 @@ class DiscoveryEvidenceCache:
                             _file(receipt, bid + '.json'),
                             _file(receipt, bid + '.v2.json'))
         # Lease renewals are workflow observations, not new media evidence.
-        values = {k: v for k, v in row.items() if k != 'archive_handoff'}
+        values = {k: v for k, v in row.items() if k not in ('archive_handoff', 'archive_completion')}
         return digest([str(self.staging), root_id, controls, receipts,
                        values, self.examples])
 

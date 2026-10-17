@@ -285,7 +285,8 @@ def make_server(jobs, queue, *, host='127.0.0.1', port=0, public_origin=None, al
                     from . import __version__
                     return self.reply(200,{'service':'muli-sorter-console','version':__version__,
                                            'submission_enabled':jobs.enabled,'move_enabled':jobs.move_enabled,'example_data':not jobs.production,
-                                           'worker_running':bool(jobs.thread and jobs.thread.is_alive())})
+                                           'worker_running':bool(jobs.thread and jobs.thread.is_alive()),
+                                           'completion_feedback': jobs.handoff.feedback_health() if getattr(jobs, 'handoff', None) else {'state':'needs_review' if getattr(jobs, 'handoff_configuration_error', None) else 'disabled'}})
                 if route=='/':
                     return self.reply(200,loading_page(ingest_url).encode(),'text/html; charset=utf-8')
                 if route=='/api/discovery-status':
@@ -549,15 +550,17 @@ def main(argv=None):
     signal.signal(signal.SIGTERM,stop)
     signal.signal(signal.SIGINT,stop)
     jobs.handoff = None
+    jobs.handoff_configuration_error = None
     if os.environ.get('MULI_ARCHIVE_HANDOFF_CONFIG'):
         try:
             from .handoff_protocol import configuration
             from .archive_handoff import ArchiveHandoff
             cfg = configuration(os.environ['MULI_ARCHIVE_HANDOFF_CONFIG'])
             jobs.handoff = ArchiveHandoff(jobs,cfg['outbox'],cfg['acknowledgements'],cfg['since'],
-                idle=lambda: not jobs.worker_busy.is_set() and server.page_cache.status().get('status')=='ready')
+                completion_facts=cfg.get('completion_facts', False), idle=lambda: not jobs.worker_busy.is_set() and server.page_cache.status().get('status')=='ready')
             jobs.handoff.start()
-        except (OSError,ValueError,KeyError,TypeError):
+        except (OSError,ValueError,KeyError,TypeError) as exc:
+            jobs.handoff_configuration_error = type(exc).__name__
             print(json.dumps({'service':'archive-handoff','status':'configuration_needs_review'}),flush=True)
     jobs.start()
     server.page_cache.warm(lambda: not any(job.get("status") in ("queued", "running") for job in jobs.list_jobs(summary=True)))

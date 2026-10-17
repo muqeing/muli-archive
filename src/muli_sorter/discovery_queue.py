@@ -178,7 +178,7 @@ class DiscoveryQueue:
                         lifecycle.retire(self.db, job, 'needs_attention', {'reason':'closed_batch_state_changed', 'source_state':row['state'], 'source_result':row['result']})
                     continue  # Persisted same-revision retirement survives lease expiry/restart.
                 if lifecycle.confirmed_handoff(row,now):
-                    lifecycle.retire(self.db,job,'closed',row['archive_handoff'])
+                    lifecycle.retire(self.db,job,'closed',lifecycle.handoff_evidence(row))
                     self.artifact_cache.pop(jid,None);self.candidate_cache.pop(jid,None)
                     continue
             candidate = size_verified_candidate(self.staging, row, allow_examples=self.examples, cache=self.evidence_cache)

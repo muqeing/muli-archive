@@ -9,6 +9,9 @@ INACTIVE = ('closed', 'cancelled', 'needs_attention', 'superseded')
 
 def confirmed_handoff(row, clock=None):
     """Only a fresh, full, revision-bound archive acknowledgement may close."""
+    from .completion_facts import confirmed
+    if confirmed(row):
+        return True
     clock = time.time() if clock is None else clock
     h = row.get('archive_handoff')
     if not isinstance(h, dict) or row['state'] != 'COMPLETED' or row['result'] not in ('COPY_VERIFIED','COPY_SIZE_VERIFIED'):
@@ -27,6 +30,11 @@ def confirmed_handoff(row, clock=None):
                 and h.get('source_disposition') in ('moved','retained'))
     except (KeyError,ValueError,TypeError):
         return False
+
+
+def handoff_evidence(row):
+    from .completion_facts import confirmed
+    return row['archive_completion'] if confirmed(row) else row['archive_handoff']
 
 
 def initialize(db):

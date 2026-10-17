@@ -17,6 +17,10 @@ class Submissions:
         self.progress = {}
         self.closed = False
 
+    def _save(self, path, value):
+        writer=getattr(self.jobs,'save_control',atomic_json)
+        return writer(path,value)
+
     def path(self, token):
         from .archive_jobs import JOB_ID
         if not isinstance(token, str) or not JOB_ID.fullmatch(token):
@@ -73,7 +77,7 @@ class Submissions:
             row = {'submission_id':token, 'status':'checking', 'created_at':time.time(),
                    'decisions_digest':binding, 'expected_job_id':ticket['prepared']['job_id'],
                    'report_id':ticket.get('origin_report_id', ticket['model']['report_id'])}
-            atomic_json(p, row)
+            self._save(p, row)
             thread = threading.Thread(target=self._run, args=(token, deepcopy(decisions), row),
                                       name='archive-submit', daemon=True)
             self.active[token] = thread
@@ -99,7 +103,7 @@ class Submissions:
             # Durable authorization precedes work. GET and ordinary start never
             # call this path, even when a recoverable request is discovered.
             row = dict(row, status='checking', recovery_authorized_at=time.time())
-            atomic_json(p, row)
+            self._save(p, row)
             thread = threading.Thread(target=self._run_recovery, args=(token, row),
                                       name='archive-submit-recovery', daemon=True)
             self.active[token] = thread
@@ -115,7 +119,7 @@ class Submissions:
             result = dict(row, status='unknown', error=str(exc)[:500])
         with self.lock:
             try:
-                atomic_json(self.path(token), result)
+                self._save(self.path(token), result)
             finally:
                 self.active.pop(token, None)
 
@@ -138,7 +142,7 @@ class Submissions:
                           issues=diagnostic_issues(exc, ticket.get('model'), ticket.get('scoped_decisions', decisions)))
         with self.lock:
             try:
-                atomic_json(self.path(token), result)
+                self._save(self.path(token), result)
             finally:
                 self.active.pop(token, None)
                 self.progress.pop(token, None)

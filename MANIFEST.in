@@ -1,0 +1,2 @@
+include tools/build_maintenance.py
+recursive-include docs/maintenance *.in *.md *.json

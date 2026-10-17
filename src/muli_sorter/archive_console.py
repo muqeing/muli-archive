@@ -504,6 +504,7 @@ def main(argv=None):
     parser.add_argument('--ingest-url', help='独立拷贝备份服务的公开根地址，仅用于页面交接')
     parser.add_argument('--allow-lan-origin',action='store_true',help='仅用于已限制来源的独立局域网网关')
     parser.add_argument('--enable-project-writes',action='store_true')
+    parser.add_argument('--enable-snapshot-retention',action='store_true',help='启用页面引用门锁与增量索引；不会自动清理或配置定时器')
     parser.add_argument('--indexed-history', action='store_true', help='使用已迁移的历史目录，只核对当前相关回执')
     parser.add_argument('--build-history-catalog', action='store_true', help='停服空闲后显式迁移历史目录并退出；不处理素材')
     parser.add_argument('--indexed-reservations', action='store_true', help='事务迁移旧预留记录，按素材及目标精确查询')
@@ -533,6 +534,7 @@ def main(argv=None):
                      production=not bool(args.demo_root),enabled=args.enable_project_writes,project_label=args.project_label,move_enabled=args.enable_source_removal,
                      indexed_reservations=args.indexed_reservations,indexed_history=args.indexed_history,
                      build_history_catalog=args.build_history_catalog,
+                     snapshot_retention_queue=args.queue if args.enable_snapshot_retention else None,
                      direct_move_view={'root':args.direct_move_root,'staging':'素材中转','projects':'.'} if args.direct_move_root else None)
     if args.build_history_catalog:
         report=jobs.history.migration_status()

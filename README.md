@@ -677,3 +677,9 @@ Completed-job feedback can survive a change in the receipt reader's temporary de
 Request binding reads a bounded stream and caches metadata only, avoiding historical page-model decoding. A newer complete consumer acknowledgement can resolve an old active revocation warning while retaining its audit record; partial or changed evidence remains visible. This does not start archive jobs or delete media. Code/CLI distribution validation and NAS feedback recovery are separate acceptance steps.
 
 The maintenance candidate passed 845 local checks and 499 isolated Linux archive checks without skips. NAS readback matched all 106 installed files, retained the other five service instances and existing resource settings, and passed desktop/mobile GET and installed CLI checks. Background feedback recovery is incremental; successful deployment does not certify every historical batch or authorize media cleanup.
+
+### Optional generated-page retention (0.18)
+
+Add a versioned `muli-archive-maintenance` JSON CLI and dependency-free NAS host zipapp. The archive reference gate is enabled only by `--enable-snapshot-retention`; deletion policy defaults off. Retain current/recent/latest pages and active references, stream changed controls into a derived index, and clean only bounded generated JSON/HTML pairs. Unknown references or unfinished deletion stop cleanup. This does not remove media or original archive records.
+
+[Maintenance commands, shadow mode, templates and deployment gates](docs/maintenance/README.md) describe the separate approval and acceptance stages. Source/CLI distribution is independent of NAS installation, timer activation and real deletion.

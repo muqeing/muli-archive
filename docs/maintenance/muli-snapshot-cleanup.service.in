@@ -1,0 +1,12 @@
+[Unit]
+Description=Muli generated-page snapshot maintenance
+ConditionPathExists=%h/.config/muli-archive/snapshot-maintenance.json
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.config/muli-archive/snapshot-maintenance.env
+ExecStart=/usr/bin/python3 %h/.local/share/muli-archive-maintenance/current.pyz --config %h/.config/muli-archive/snapshot-maintenance.json run --execute --confirmed-policy ${MULI_SNAPSHOT_POLICY_SHA256}
+ExecStopPost=/usr/bin/python3 %h/.local/share/muli-archive-maintenance/current.pyz --config %h/.config/muli-archive/snapshot-maintenance.json recover-freezer --execute --confirmed-policy ${MULI_SNAPSHOT_POLICY_SHA256}
+TimeoutStartSec=90
+TimeoutStopSec=30
+UMask=0077

@@ -46,7 +46,7 @@ def publish(jobs, ticket, request, *, progress=None, saved_request=False, confir
                 raise ArchiveError('本次素材已被另一份归档计划占用，请保留原任务并核对')
             reservations[row['source_path']] = reservation
     if not saved_request:
-        save_json(jobs.state/'requests'/('request-'+job_id+'.json'), request)
+        jobs.save_control(jobs.state/'requests'/('request-'+job_id+'.json'), request)
     if index is not None:
         index.reserve(reservations)
     else:

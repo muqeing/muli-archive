@@ -1,0 +1,10 @@
+[Unit]
+Description=Check Muli page retention when idle
+
+[Timer]
+OnBootSec=5min
+OnUnitInactiveSec=30min
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

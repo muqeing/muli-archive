@@ -1,15 +1,12 @@
 import json
 import os
 from pathlib import Path
-import sys
 import tempfile
 import unittest
 from unittest.mock import patch
 
-# Use this repository's source. Injecting an older checkout into sys.path made
-# spawned classification workers run a different token recipe than the parent.
-SRC = Path(__file__).resolve().parents[1] / 'src'
-sys.path.insert(0, str(SRC))
+# Respect the configured editable checkout or installed role wheel. Changing
+# sys.path here makes spawned workers test a different package than the parent.
 
 from muli_sorter.archive import record
 from muli_sorter.archive_io import (ArchiveError, atomic_json, directory,

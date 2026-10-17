@@ -1,0 +1,11 @@
+[Unit]
+Description=Check Muli page retention candidates without deletion
+
+[Timer]
+OnBootSec=5min
+OnUnitInactiveSec=30min
+AccuracySec=1min
+Unit=muli-snapshot-shadow.service
+
+[Install]
+WantedBy=timers.target

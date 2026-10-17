@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "muli-sorter-preview"
-version = "0.17.0"
+version = "0.18.0"
 description = "Independent read-only completion service, order candidates, and synthetic archive validation"
 license = { text = "Apache-2.0" }
 requires-python = ">=3.12"
@@ -15,6 +15,7 @@ photos = ["rawpy==0.27.1", "Pillow==12.3.0", "numpy==2.5.3"]
 
 [project.scripts]
 muli-archive = "muli_sorter.remote_cli:main"
+muli-archive-maintenance = "muli_sorter.snapshot_maintenance_cli:main"
 muli-sorter = "muli_sorter.cli:main"
 muli-sorter-check-plan = "muli_sorter.check_plan:main"
 muli-sorter-archive-demo = "muli_sorter.archive_demo:main"

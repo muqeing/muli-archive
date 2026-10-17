@@ -43,7 +43,7 @@ class PersistentTickets:
     the record written by ``__setitem__``.
     """
 
-    def __init__(self, root, identity, memory_items=2):
+    def __init__(self, root, identity, memory_items=2, *, retention=None):
         if type(memory_items) is not int or memory_items < 0:
             raise ArchiveError("预览票据内存容量无效")
         try:
@@ -53,6 +53,7 @@ class PersistentTickets:
             _digest(copied_identity)
         except Exception as exc:
             raise ArchiveError("服务身份不可序列化") from exc
+        self.retention = retention
         self.root = Path(root).absolute()
         self._identity = copied_identity
         self.memory_items = memory_items
@@ -144,7 +145,10 @@ class PersistentTickets:
                 pass
             try:
                 record = self._record(token, stored)
-                atomic_json(path, record)
+                if self.retention is None:
+                    atomic_json(path, record)
+                else:
+                    self.retention.write(path,record,atomic_json)
             except ArchiveError:
                 raise
             except Exception as exc:

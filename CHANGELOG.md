@@ -1,3 +1,10 @@
+## 0.18.0 — 2026-10-17
+
+- Add opt-in generated-page retention with a shared archive reference gate, durable write fences and a metadata-bound incremental index. Stream canonical historical requests and preserve unknown/retained/active work. Completed self-contained requests can release display-page pins without removing original controls.
+- Add the versioned JSON `muli-archive-maintenance` CLI, standard-library host zipapp, disabled configuration and user-unit templates. Default invocations preview; shadow updates only its own index and never freezes or deletes pages. Timer installation and real deletion require separate deployment authorization.
+- Limit execution to old generated model/HTML pairs, preserve current/latest/recent and referenced pages, bound batch/byte/freeze budgets, journal outcomes and reconcile only the original classifier after an interrupted run. No recursive or media deletion.
+- Keep source admission, target verification, tickets, execution and original audit retention unchanged; derived-index failure disables cleanup rather than original control writes. Synthetic tests and source distribution do not certify production compatibility or natural timer operation.
+
 ## 0.17.0 — 2026-10-16
 - Restore completed-job feedback after a receipt reader device number changes. Bind the exact original request, persistent roots and file plans; accept only the three transient reader fields when the projected full manifest digest matches. Preserve source admission, target verification and unverified-copy protections.
 - Stream original request binding with bounded buffers and cache metadata only; avoid decoding historical page models. Suppress an old active revocation warning only after a newer fully confirmed consumer acknowledgement; retain the audit history and partial warnings.

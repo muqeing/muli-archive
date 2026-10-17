@@ -1,0 +1,20 @@
+{
+  "schema": "snapshot-maintenance/1",
+  "queue": "/srv/muli/classification",
+  "archive_state": "/srv/muli/archive-state",
+  "ingest_database": "/srv/muli/ingest-state/ingest.sqlite3",
+  "classifier_container": "muli-sorter-muli-sorter-1",
+  "archive_container": "muli-archive-archive-console-1",
+  "protected_containers": ["app-muli-ingest-1", "muli-sorter-muli-postcopy-1", "muli-sorter-muli-sorter-previews-1", "muli-archive-archive-lan-1"],
+  "archive_image_id": "REPLACE_WITH_ACCEPTED_IMAGE_ID",
+  "storage": {"mounts": ["/vol1", "/vol2"], "arrays": ["md0"], "disks": ["sda"]},
+  "policy": {
+    "enabled": false,
+    "minimum_age_days": 7,
+    "keep_latest": 20,
+    "maximum_generations": 20,
+    "maximum_bytes": 1000000000,
+    "pause_seconds": 5.0,
+    "successful_log_days": 90
+  }
+}

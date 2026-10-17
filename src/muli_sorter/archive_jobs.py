@@ -1,5 +1,5 @@
 """Durable, single-worker archive jobs accepted from an explicitly confirmed preview."""
-from contextlib import ExitStack
+from contextlib import ExitStack, nullcontext
 from copy import deepcopy
 from datetime import datetime, timezone
 from hashlib import sha256
@@ -101,7 +101,7 @@ def copy_project(project):
 
 class ArchiveJobs:
     def __init__(self, staging, projects, state, model_provider, runtime_provider, *,
-                 production=False, enabled=False, project_label=None, checkpoint=None, move_enabled=False, direct_move_view=None, indexed_reservations=False, indexed_history=False, build_history_catalog=False):
+                 production=False, enabled=False, project_label=None, checkpoint=None, move_enabled=False, direct_move_view=None, indexed_reservations=False, indexed_history=False, build_history_catalog=False, snapshot_retention_queue=None):
         self.staging, self.projects, self.state = [Path(p).absolute() for p in (staging, projects, state)]
         if any(self.state == p or self.state.is_relative_to(p) or p.is_relative_to(self.state)
                for p in (self.staging, self.projects)):
@@ -115,6 +115,7 @@ class ArchiveJobs:
         self.stack = ExitStack()
         self.mutex = threading.RLock()
         self.previews = {}
+        self.retention = None
         self.preflight_lock = threading.Lock()
         self.job_catalog = JobCatalog(self.state / 'requests')
         self.checks = PreflightChecks(self.preflight)
@@ -147,8 +148,13 @@ class ArchiveJobs:
                 self.stack.callback(self.reservations.close)
             elif (self.state / 'reservations.sqlite3').exists():
                 raise ArchiveError('预留索引已启用；禁止回退读取旧 JSON，请先按迁移说明恢复回退记录')
+            if snapshot_retention_queue is not None:
+                from .snapshot_references import References
+                self.retention = References(self.state,snapshot_retention_queue,create=True)
+                self.retention.activate()
+                self.stack.callback(self.retention.close)
             from .archive_tickets import PersistentTickets
-            self.previews = PersistentTickets(self.state/'confirmation-tickets', self.identity)
+            self.previews = PersistentTickets(self.state/'confirmation-tickets', self.identity, retention=self.retention)
             self.target_digests = TargetDigestCache(disk_path=self.state/'target-digests-v1.sqlite3', ttl=30*24*3600)
             self.stack.callback(self.target_digests.close)
             if indexed_history:
@@ -222,9 +228,14 @@ class ArchiveJobs:
     def get(self, job_id):
         return read_json(self._job_path(job_id))
 
+    def save_control(self, path, value):
+        if self.retention is None:
+            return save_json(path,value)
+        return self.retention.write(path,value,save_json)
+
     def _save(self, job):
         job['updated_at'] = now()
-        save_json(self._job_path(job['job_id']), job)
+        self.save_control(self._job_path(job['job_id']), job)
 
     def list_jobs(self, *, summary=False):
         rows = self.job_catalog.snapshot()[:20]
@@ -545,7 +556,8 @@ class ArchiveJobs:
             if progress:
                 progress(phase='等待前一次检查结束')
         try:
-            return self._preflight(decisions, progress=progress)
+            with self.retention.gate() if self.retention is not None else nullcontext():
+                return self._preflight(decisions, progress=progress)
         finally:
             self.preflight_lock.release()
 

@@ -1,3 +1,7 @@
+## 配套拷贝服务0.2.1 — 2026-10-18
+
+Ingest新增可选短批公平调度，最多两个工作上下文共用一个读取轮次，保留原内容证明与最终回执条件。仅拷贝服务镜像更新；本归档/分类服务与CLI仍为0.19.0，实例不变。默认和新调度各128项隔离检查、正式公共健康及电脑/手机GET通过；真实媒体吞吐未测。详见Ingest仓库0.2.1说明。
+
 ## 0.19.0 — 2026-10-18
 
 - Add explicitly enabled historical completion facts and exact revision-bound, transactional acknowledgements. Keep all current cleanup permissions separate and expiring.

@@ -13,6 +13,7 @@ from .matching import project_index
 from .queue_evidence import build_job, completed, signal, media_signal, size_verified_candidate
 from .queue_candidates import refresh as refresh_candidates
 from . import batch_lifecycle as lifecycle
+from .queue_evidence_cache import DiscoveryEvidenceCache
 from .queue_source import validate_snapshot
 from .review import canonical, digest
 from .review_render import render_review
@@ -71,6 +72,7 @@ class DiscoveryQueue:
         self.index, self.index_at = None, 0
         self.artifact_cache = {}
         self.candidate_cache = {}
+        self.evidence_cache = DiscoveryEvidenceCache(self.staging, allow_examples=self.examples)
 
     def __enter__(self):
         return self
@@ -179,7 +181,7 @@ class DiscoveryQueue:
                     lifecycle.retire(self.db,job,'closed',row['archive_handoff'])
                     self.artifact_cache.pop(jid,None);self.candidate_cache.pop(jid,None)
                     continue
-            candidate = size_verified_candidate(self.staging, row, allow_examples=self.examples)
+            candidate = size_verified_candidate(self.staging, row, allow_examples=self.examples, cache=self.evidence_cache)
             if not completed(row) and candidate is None:
                 state='verification_required' if row['state']=='COMPLETED' else 'waiting_completion'
                 labels={'COPYING':'正在拷贝','VERIFYING':'正在校验','FINALIZING':'正在生成完成回执','INTERRUPTED':'拷贝已中断','FAILED':'拷贝失败','QUEUED':'拷贝排队中'}
@@ -192,7 +194,7 @@ class DiscoveryQueue:
                 # service discard the stale worker result before publishing.
                 try:
                     deps = json.loads(job['dependencies']) or [row['batch_id']]
-                    token = media_signal(self.staging,deps,snapshot,allow_examples=self.examples)
+                    token = media_signal(self.staging,deps,snapshot,allow_examples=self.examples,cache=self.evidence_cache)
                     if token != job['token']:
                         self.db.execute(
                             "UPDATE jobs SET state='queued',token=?,error=NULL,queued_at=?,ready_at=NULL WHERE id=?",
@@ -205,7 +207,7 @@ class DiscoveryQueue:
                 continue
             try:
                 deps = json.loads(job['dependencies']) or [row['batch_id']]
-                token = media_signal(self.staging,deps,snapshot,allow_examples=self.examples)
+                token = media_signal(self.staging,deps,snapshot,allow_examples=self.examples,cache=self.evidence_cache)
                 valid = job['state']=='awaiting_confirmation' and token==job['token']
                 model = None
                 if job['state']=='awaiting_confirmation' and not str(job['token']).startswith('media-evidence/1:'):
@@ -214,7 +216,7 @@ class DiscoveryQueue:
                     # the stored token. Queued/unknown results never get promoted.
                     try:
                         model = self.verified_model(job)
-                        valid = signal(self.staging,deps,snapshot,model['projects'],allow_examples=self.examples)==job['token']
+                        valid = signal(self.staging,deps,snapshot,model['projects'],allow_examples=self.examples,cache=self.evidence_cache)==job['token']
                     except FileNotFoundError:
                         valid = False
                 if valid:
@@ -232,6 +234,12 @@ class DiscoveryQueue:
         for job in self.jobs(active_only=self.lifecycle_enabled):
             if job['id'] not in current:
                 self.db.execute("UPDATE jobs SET state='superseded',error=? WHERE id=?",('当前完整列表已无此版本',job['id']))
+        active = self.jobs(active_only=self.lifecycle_enabled)
+        needed = {j['batch_id'] for j in active if j['state'] not in lifecycle.INACTIVE}
+        for job in active:
+            if job['state'] not in lifecycle.INACTIVE:
+                needed.update(json.loads(job['dependencies']))
+        self.evidence_cache.prune(needed)
         self.db.commit()
         self.checkpoint('discovered')
         return snapshot, self.status()

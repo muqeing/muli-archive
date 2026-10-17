@@ -1,3 +1,9 @@
+## 0.18.1 — 2026-10-17
+
+- Reuse compact, bounded classification evidence hints only when all control paths, batch versions and correction receipts are unchanged. Keep original signal identities and fresh archive/build admission validation. No raw manifest or receipt body is retained in the discovery cache.
+- Retired batches never enter this evidence cache; release hints when work leaves the active set. This first V2 increment does not change permanent completion acknowledgements, source-list enumeration, metadata scheduling or media cleanup.
+- CLI and source package remain versioned together. Deployment and real business performance are recorded separately.
+
 ## 0.18.0 — 2026-10-17
 
 - Add opt-in generated-page retention with a shared archive reference gate, durable write fences and a metadata-bound incremental index. Stream canonical historical requests and preserve unknown/retained/active work. Completed self-contained requests can release display-page pins without removing original controls.

@@ -1,6 +1,7 @@
 """Completion gates and review generation; source media are only stat'ed."""
 from datetime import datetime, timezone
 import os
+from pathlib import Path
 from .intake import EvidenceError, _open, read_bytes, resolve_files, runtime_check, validate_record, media_stat
 from .time_correction_receipt import ReceiptError, receipt_signature
 from .photo_clock_receipt import signature as photo_clock_signature
@@ -13,8 +14,11 @@ def completed(row):
     return row['state']=='COMPLETED' and row['result']=='COPY_VERIFIED' and bool(row['completed_at']) and row['revision']>=1
 
 
-def size_verified_candidate(staging, row, *, allow_examples=False):
+def size_verified_candidate(staging, row, *, allow_examples=False, cache=None):
     """Return private validated evidence for a size-only batch, else None."""
+    if cache is not None:
+        _cache_scope(staging, allow_examples, cache)
+        return cache.candidate(row)
     if (not isinstance(row, dict) or row.get('state') != 'COMPLETED' or
             row.get('result') != 'COPY_SIZE_VERIFIED' or not row.get('completed_at') or
             type(row.get('revision')) is not int or row['revision'] < 1):
@@ -26,60 +30,69 @@ def size_verified_candidate(staging, row, *, allow_examples=False):
     return manifest.get('_postcopy_evidence')
 
 
-def signal_parts(staging, batch_ids, snapshot, *, allow_examples=False):
-    """Small receipt plus manifest attributes, not repeated full-manifest hashing.
+def _signal_part(staging, bid, row, candidate):
+    receipt = read_bytes(staging, bid+'/ingest_complete.json')
+    if len(receipt)>65536:
+        raise EvidenceError('完成回执超过大小限制')
+    attrs = []
+    for name in ('ingest_manifest.json','ingest_manifest.md'):
+        fd = _open(staging, bid+'/'+name)
+        try:
+            s = os.fstat(fd)
+            attrs.append([s.st_dev,s.st_ino,s.st_size,s.st_mtime_ns,s.st_ctime_ns])
+        finally:
+            os.close(fd)
+    try:
+        correction_receipt = receipt_signature(staging, bid)
+    except ReceiptError as exc:
+        raise EvidenceError(str(exc)) from exc
+    # Optional by design: keep the exact legacy signal when absent.  Once
+    # present, creation, replacement, or removal invalidates the signal.
+    if correction_receipt is not None:
+        attrs.append(['time_correction_receipt', correction_receipt])
+    try:
+        photo_receipt = photo_clock_signature(staging, bid)
+    except ReceiptError as exc:
+        raise EvidenceError(str(exc)) from exc
+    if photo_receipt is not None:
+        attrs.append(['photo_time_correction', photo_receipt])
+    if candidate is not None:
+        attrs.append(['postcopy_receipt', candidate['receipt_signature']])
+    # Workflow acknowledgements expire/renew independently of media. Keep
+    # the exact pre-lifecycle evidence token; a handoff refresh must not
+    # requeue completed classifications or invalidate a running worker.
+    evidence_row = {k:v for k,v in row.items() if k != 'archive_handoff'}
+    return digest([evidence_row, digest(receipt.hex()), attrs])
 
-    This invalidation hint never authorizes an archive; execution needs fresh hashes.
-    """
-    states = {s['batch_id']:s for s in snapshot['batches']}
+
+def _cache_scope(staging, allow_examples, cache):
+    if Path(staging).absolute() != cache.staging or allow_examples != cache.examples:
+        raise EvidenceError('分类证据缓存绑定其他来源或运行模式')
+
+
+def signal_parts(staging, batch_ids, snapshot, *, allow_examples=False, cache=None):
+    """Discovery hints only; archive execution retains fresh validation."""
+    if cache is not None:
+        _cache_scope(staging, allow_examples, cache)
+        return cache.parts(batch_ids, snapshot)
+    states = {s["batch_id"]: s for s in snapshot["batches"]}
     values = {}
     for bid in sorted(set(batch_ids)):
         row = states.get(bid)
         candidate = size_verified_candidate(staging, row, allow_examples=allow_examples) if row else None
         if row is None or (not completed(row) and candidate is None):
-            raise EvidenceError('当前批次或被引用批次尚未最终完成')
-        receipt = read_bytes(staging, bid+'/ingest_complete.json')
-        if len(receipt)>65536:
-            raise EvidenceError('完成回执超过大小限制')
-        attrs = []
-        for name in ('ingest_manifest.json','ingest_manifest.md'):
-            fd = _open(staging, bid+'/'+name)
-            try:
-                s = os.fstat(fd)
-                attrs.append([s.st_dev,s.st_ino,s.st_size,s.st_mtime_ns,s.st_ctime_ns])
-            finally:
-                os.close(fd)
-        try:
-            correction_receipt = receipt_signature(staging, bid)
-        except ReceiptError as exc:
-            raise EvidenceError(str(exc)) from exc
-        # Optional by design: keep the exact legacy signal when absent.  Once
-        # present, creation, replacement, or removal invalidates the signal.
-        if correction_receipt is not None:
-            attrs.append(['time_correction_receipt', correction_receipt])
-        try:
-            photo_receipt = photo_clock_signature(staging, bid)
-        except ReceiptError as exc:
-            raise EvidenceError(str(exc)) from exc
-        if photo_receipt is not None:
-            attrs.append(['photo_time_correction', photo_receipt])
-        if candidate is not None:
-            attrs.append(['postcopy_receipt', candidate['receipt_signature']])
-        # Workflow acknowledgements expire/renew independently of media. Keep
-        # the exact pre-lifecycle evidence token; a handoff refresh must not
-        # requeue completed classifications or invalidate a running worker.
-        evidence_row = {k:v for k,v in row.items() if k != 'archive_handoff'}
-        values[bid] = digest([evidence_row, digest(receipt.hex()), attrs])
+            raise EvidenceError("当前批次或被引用批次尚未最终完成")
+        values[bid] = _signal_part(staging, bid, row, candidate)
     return values
 
 
-def signal(staging, batch_ids, snapshot, projects, *, allow_examples=False):
+def signal(staging, batch_ids, snapshot, projects, *, allow_examples=False, cache=None):
     # Legacy token recipe retained only to verify rolling migrations.
-    return digest([sorted(signal_parts(staging,batch_ids,snapshot,allow_examples=allow_examples).items()),projects])
+    return digest([sorted(signal_parts(staging,batch_ids,snapshot,allow_examples=allow_examples,cache=cache).items()),projects])
 
 
-def media_signal(staging, batch_ids, snapshot, *, allow_examples=False):
-    return 'media-evidence/1:' + digest(sorted(signal_parts(staging,batch_ids,snapshot,allow_examples=allow_examples).items()))
+def media_signal(staging, batch_ids, snapshot, *, allow_examples=False, cache=None):
+    return 'media-evidence/1:' + digest(sorted(signal_parts(staging,batch_ids,snapshot,allow_examples=allow_examples,cache=cache).items()))
 
 
 def build_job(staging, batch_id, snapshot, projects, *, allow_examples=False):

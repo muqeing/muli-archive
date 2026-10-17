@@ -48,6 +48,8 @@ class MaterialReports:
     The owning ArchiveJobs mutex serializes all accesses.
     """
 
+    LIMIT = 4
+
     def __init__(self):
         self._rows = {}
 
@@ -59,7 +61,15 @@ class MaterialReports:
             encoder = json.JSONEncoder(ensure_ascii=False, separators=(',', ':'))
             for chunk in encoder.iterencode(model):
                 stream.write(chunk.encode('utf-8'))
-        self._rows[key] = buffer.getvalue()
+        # Both page construction and explicit material queries insert here.
+        # Enforcing the limit at only one call site left background page
+        # generations accumulating indefinitely. Publish only after a complete
+        # compression, and retain the four most recently opened identities.
+        raw = buffer.getvalue()
+        self._rows.pop(key, None)
+        self._rows[key] = raw
+        while len(self._rows) > self.LIMIT:
+            self._rows.pop(next(iter(self._rows)))
 
     def get(self, key, default=None):
         raw = self._rows.get(key)

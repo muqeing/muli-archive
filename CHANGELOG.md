@@ -1,4 +1,5 @@
 ## 0.17.0 — 2026-10-16
+- Enforce the four opened-page snapshot limit inside the cache itself, including background page builds. Reopening an identity refreshes its place; failed serialization preserves existing snapshots. No change to media checks, tickets, execution or retention cleanup.
 - NAS phase-one read-only acceptance completed with exact role installation hashes, desktop/mobile pagination and CLI checks; initial failures and recovery remain documented. No media or retention deletion acceptance.
 
 - Accept multiple current copies of a historical origin in the browser summary; reuse metadata-bound original projections for display while execution reads remain strict.

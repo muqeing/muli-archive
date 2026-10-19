@@ -55,6 +55,27 @@ class MaterialReportBudgetTests(unittest.TestCase):
         restored['units'].clear()
         self.assertEqual(reports.get(original['report_id']), expected)
 
+    def test_byte_budget_and_replacement_release_retained_payloads(self):
+        reports = MaterialReports()
+        reports.MAX_BYTES = 300
+        for index in range(20):
+            model = self.model(index)
+            reports[model['report_id']] = model
+            self.assertLessEqual(reports._bytes, reports.MAX_BYTES)
+            self.assertEqual(reports._bytes, sum(map(len, reports._rows.values())))
+        self.assertLess(len(reports),4)
+        last=self.model(19);self.assertEqual(reports.get(last['report_id']),last)
+        reports[last['report_id']]=last
+        self.assertEqual(reports._bytes,sum(map(len,reports._rows.values())))
+        reports.pop(last['report_id'])
+        self.assertEqual(reports._bytes,sum(map(len,reports._rows.values())))
+
+    def test_single_oversize_payload_is_not_kept_or_partially_restored(self):
+        reports=MaterialReports();reports.MAX_BYTES=1
+        model=self.model(1);reports[model['report_id']]=model
+        self.assertEqual(len(reports),0);self.assertEqual(reports._bytes,0)
+        self.assertIsNone(reports.get(model['report_id']))
+
 
 if __name__ == '__main__':
     unittest.main()

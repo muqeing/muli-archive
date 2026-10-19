@@ -49,9 +49,11 @@ class MaterialReports:
     """
 
     LIMIT = 4
+    MAX_BYTES = 32 * 1024 * 1024
 
     def __init__(self):
         self._rows = {}
+        self._bytes = 0
 
     def __setitem__(self, key, model):
         if key != model.get('report_id'):
@@ -66,14 +68,18 @@ class MaterialReports:
         # generations accumulating indefinitely. Publish only after a complete
         # compression, and retain the four most recently opened identities.
         raw = buffer.getvalue()
-        self._rows.pop(key, None)
+        self._bytes -= len(self._rows.pop(key, b''))
         self._rows[key] = raw
-        while len(self._rows) > self.LIMIT:
-            self._rows.pop(next(iter(self._rows)))
+        self._bytes += len(raw)
+        while len(self._rows) > self.LIMIT or self._bytes > self.MAX_BYTES:
+            self.pop(next(iter(self._rows)))
 
     def get(self, key, default=None):
         raw = self._rows.get(key)
-        return default if raw is None else json.loads(gzip.decompress(raw))
+        if raw is None:
+            return default
+        with gzip.GzipFile(fileobj=io.BytesIO(raw), mode='rb') as stream:
+            return json.load(io.TextIOWrapper(stream, encoding='utf-8'))
 
     def __len__(self):
         return len(self._rows)
@@ -83,7 +89,7 @@ class MaterialReports:
 
     def pop(self, key):
         # Eviction does not reconstruct a large snapshot that is being discarded.
-        self._rows.pop(key)
+        self._bytes -= len(self._rows.pop(key))
 
 
 def now():
@@ -101,7 +107,7 @@ def copy_project(project):
 
 class ArchiveJobs:
     def __init__(self, staging, projects, state, model_provider, runtime_provider, *,
-                 production=False, enabled=False, project_label=None, checkpoint=None, move_enabled=False, direct_move_view=None, indexed_reservations=False, indexed_history=False, build_history_catalog=False, snapshot_retention_queue=None):
+                 production=False, enabled=False, project_label=None, checkpoint=None, move_enabled=False, direct_move_view=None, indexed_reservations=False, indexed_history=False, build_history_catalog=False, snapshot_retention_queue=None, startup_progress=None):
         self.staging, self.projects, self.state = [Path(p).absolute() for p in (staging, projects, state)]
         if any(self.state == p or self.state.is_relative_to(p) or p.is_relative_to(self.state)
                for p in (self.staging, self.projects)):
@@ -143,6 +149,8 @@ class ArchiveJobs:
             self.identity = identity
             self.reservations = None
             if indexed_reservations:
+                if startup_progress is not None:
+                    startup_progress('核对归档预留索引')
                 from .archive_reservations import ReservationIndex
                 self.reservations = ReservationIndex(self.state, identity)
                 self.stack.callback(self.reservations.close)
@@ -158,6 +166,8 @@ class ArchiveJobs:
             self.target_digests = TargetDigestCache(disk_path=self.state/'target-digests-v1.sqlite3', ttl=30*24*3600)
             self.stack.callback(self.target_digests.close)
             if indexed_history:
+                if startup_progress is not None:
+                    startup_progress('核对历史目录索引')
                 from .scoped_archive_history import ScopedArchiveHistory
                 self.history = ScopedArchiveHistory(self.state, identity, self.label, self.production,
                                                    initialize=build_history_catalog)
@@ -216,6 +226,10 @@ class ArchiveJobs:
                     self.material_reports.pop(next(iter(self.material_reports)))
             else:
                 model = self.material_reports.get(report_id)
+                if model is None:
+                    resolver = getattr(self.provider, 'report_for_id', None)
+                    if resolver is not None:
+                        model = resolver(report_id)
             if model is None:
                 raise ArchiveError('该页面快照已过期，请保存草稿后重新打开页面')
         return project_discarded(model, self.staging)

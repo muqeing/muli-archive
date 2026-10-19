@@ -31,7 +31,7 @@ class QueueModelCache:
                 self.key=key;self.model=model;self.orders={}
             # Order freshness is checked on each use. Existing feed cache skips
             # unchanged enrichment; callers own their copy and cannot poison it.
-            model,_=apply_feed(self.root,self.model,cache=self.orders)
+            model,_=apply_feed(self.root,self.model,cache=self.orders,share_immutable=True)
             return model
 
     def __call__(self):

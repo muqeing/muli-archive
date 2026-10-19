@@ -245,7 +245,7 @@ class HistoryCatalog:
     def _validate_rows(self):
         self._guard()
         for job_id, unit_id, completed_at, scope_digest, item_json in self._db.execute(
-                "SELECT job_id,unit_id,completed_at,scope_digest,item_json FROM items ORDER BY job_id,unit_id"):
+                "SELECT job_id,unit_id,completed_at,scope_digest,item_json FROM items NOT INDEXED"):
             prepared = self._prepare_item(job_id, (json.loads(item_json), scope_digest))
             if prepared[1] != unit_id or prepared[2] != completed_at:
                 raise HistoryCatalogError("历史目录项目派生字段异常")

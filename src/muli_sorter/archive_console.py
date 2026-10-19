@@ -103,7 +103,21 @@ def queue_model(queue):
     return model
 
 
-def make_server(jobs, queue, *, host='127.0.0.1', port=0, public_origin=None, allow_lan_origin=False, photo_previews=None, ingest_url=None):
+def checked_origin(origin, allow_lan_origin=False):
+    parsed=urlsplit(origin)
+    valid_host=parsed.hostname in ('127.0.0.1','localhost')
+    if allow_lan_origin:
+        try:
+            address=ipaddress.ip_address(parsed.hostname)
+            valid_host=valid_host or any(address in ipaddress.ip_network(cidr) for cidr in ('10.0.0.0/8','172.16.0.0/12','192.168.0.0/16'))
+        except ValueError:
+            pass
+    if parsed.scheme!='http' or not valid_host or parsed.path or parsed.query or parsed.fragment or parsed.username:
+        raise ValueError('控制台只接受本机地址或明确启用的局域网 IPv4 地址')
+    return origin
+
+
+def make_server(jobs, queue, *, host='127.0.0.1', port=0, public_origin=None, allow_lan_origin=False, photo_previews=None, ingest_url=None, startup_server=None):
     if host not in ('127.0.0.1','0.0.0.0'):
         raise ValueError('控制台监听地址无效')
     # 0.0.0.0 is for a container with a loopback-only published host port.
@@ -125,6 +139,14 @@ def make_server(jobs, queue, *, host='127.0.0.1', port=0, public_origin=None, al
                 jobs.label, ingest_url, page_signature(queue, jobs.state), renderer)
     def build_page(phase):
         nonlocal restore_once
+        if startup_server is not None:
+            from .archive_startup import diagnostic
+            import time
+            began = time.monotonic()
+            update = phase
+            def phase(name):
+                diagnostic(name, began, 'archive-page')
+                update(name)
         key = display_key()
         if restore_once and display_store is not None:
             restore_once = False
@@ -460,8 +482,11 @@ def make_server(jobs, queue, *, host='127.0.0.1', port=0, public_origin=None, al
                     result['issues'] = diagnostic_issues(exc, ticket.get('model'),
                         ticket.get('scoped_decisions', body.get('decisions')))
                 self.reply(409,result)
-    class ReviewServer(ThreadingHTTPServer):
-        def server_close(self):
+    review_closed = False
+    def close_review():
+        nonlocal review_closed
+        if not review_closed:
+            review_closed = True
             submissions.close()
             if photo_warmup is not None:
                 photo_warmup.close()
@@ -470,23 +495,22 @@ def make_server(jobs, queue, *, host='127.0.0.1', port=0, public_origin=None, al
             page_cache.shutdown()
             if watch is not None:
                 watch.close()
+    class ReviewServer(ThreadingHTTPServer):
+        def server_close(self):
+            close_review()
             super().server_close()
-    server=ReviewServer((host,port),Handler)
+    server=startup_server or ReviewServer((host,port),Handler)
+    if startup_server is not None:
+        startup_server.attach(Handler, close_review)
     server.page_cache = page_cache
     server.photo_index = photo_index
     server.photo_warmup = photo_warmup
     origin=public_origin or 'http://127.0.0.1:'+str(server.server_port)
-    parsed=urlsplit(origin)
-    valid_host=parsed.hostname in ('127.0.0.1','localhost')
-    if allow_lan_origin:
-        try:
-            address=ipaddress.ip_address(parsed.hostname)
-            valid_host=valid_host or any(address in ipaddress.ip_network(cidr) for cidr in ('10.0.0.0/8','172.16.0.0/12','192.168.0.0/16'))
-        except ValueError:
-            pass
-    if parsed.scheme!='http' or not valid_host or parsed.path or parsed.query or parsed.fragment or parsed.username:
+    try:
+        checked_origin(origin, allow_lan_origin)
+    except ValueError:
         server.server_close()
-        raise ValueError('控制台只接受本机地址或明确启用的局域网 IPv4 地址')
+        raise
     server.public_origin=origin
     return server
 
@@ -531,48 +555,72 @@ def main(argv=None):
             parser.error('生产模式必须提供现有 Ingest 只读状态库')
         runtime=lambda:sqlite_snapshot(args.state_db)
         provider=QueueModelCache(args.queue)
+    if args.build_history_catalog:
+        return run_console(args, provider, runtime)
+    if args.host == '0.0.0.0' and args.public_origin is None:
+        parser.error('容器模式必须明确本机回环访问地址')
+    checked_origin(args.public_origin or 'http://127.0.0.1:'+str(args.port), args.allow_lan_origin)
+    from .archive_startup import StartupServer
+    with StartupServer((args.host, args.port)) as startup_server:
+        return run_console(args, provider, runtime, startup_server)
+
+
+def run_console(args, provider, runtime, startup_server=None):
     jobs=ArchiveJobs(args.staging,args.projects,args.state,provider,runtime,
                      production=not bool(args.demo_root),enabled=args.enable_project_writes,project_label=args.project_label,move_enabled=args.enable_source_removal,
                      indexed_reservations=args.indexed_reservations,indexed_history=args.indexed_history,
                      build_history_catalog=args.build_history_catalog,
                      snapshot_retention_queue=args.queue if args.enable_snapshot_retention else None,
-                     direct_move_view={'root':args.direct_move_root,'staging':'素材中转','projects':'.'} if args.direct_move_root else None)
+                     direct_move_view={'root':args.direct_move_root,'staging':'素材中转','projects':'.'} if args.direct_move_root else None,
+                     startup_progress=getattr(startup_server, 'set_phase', None))
     if args.build_history_catalog:
         report=jobs.history.migration_status()
         jobs.close()
         print(json.dumps({'history_catalog':report,'media_modified':False},ensure_ascii=False))
         return 0
-    photos=PhotoPreviews(jobs.staging,jobs.state/'photo-previews')
-    server=make_server(jobs,args.queue,photo_previews=photos,host=args.host,port=args.port,public_origin=args.public_origin,
-                       allow_lan_origin=args.allow_lan_origin, ingest_url=args.ingest_url)
-    def stop(*_):
-        threading.Thread(target=server.shutdown,daemon=True).start()
-    signal.signal(signal.SIGTERM,stop)
-    signal.signal(signal.SIGINT,stop)
+    photos = None
+    server = None
     jobs.handoff = None
-    jobs.handoff_configuration_error = None
-    if os.environ.get('MULI_ARCHIVE_HANDOFF_CONFIG'):
-        try:
-            from .handoff_protocol import configuration
-            from .archive_handoff import ArchiveHandoff
-            cfg = configuration(os.environ['MULI_ARCHIVE_HANDOFF_CONFIG'])
-            jobs.handoff = ArchiveHandoff(jobs,cfg['outbox'],cfg['acknowledgements'],cfg['since'],
-                completion_facts=cfg.get('completion_facts', False), idle=lambda: not jobs.worker_busy.is_set() and server.page_cache.status().get('status')=='ready')
-            jobs.handoff.start()
-        except (OSError,ValueError,KeyError,TypeError) as exc:
-            jobs.handoff_configuration_error = type(exc).__name__
-            print(json.dumps({'service':'archive-handoff','status':'configuration_needs_review'}),flush=True)
-    jobs.start()
-    server.page_cache.warm(lambda: not any(job.get("status") in ("queued", "running") for job in jobs.list_jobs(summary=True)))
-    print(json.dumps({'service':'muli-sorter-console','url':server.public_origin,'example_data':not jobs.production,
-                      'submission_enabled':jobs.enabled}),flush=True)
     try:
-        server.serve_forever(poll_interval=0.25)
+        if startup_server is not None:
+            startup_server.set_phase('准备归档页面')
+        photos=PhotoPreviews(jobs.staging,jobs.state/'photo-previews')
+        server=make_server(jobs,args.queue,photo_previews=photos,host=args.host,port=args.port,public_origin=args.public_origin,
+                           allow_lan_origin=args.allow_lan_origin, ingest_url=args.ingest_url, startup_server=startup_server)
+        def stop(*_):
+            threading.Thread(target=server.shutdown,daemon=True).start()
+        signal.signal(signal.SIGTERM,stop)
+        signal.signal(signal.SIGINT,stop)
+        jobs.handoff_configuration_error = None
+        if os.environ.get('MULI_ARCHIVE_HANDOFF_CONFIG'):
+            try:
+                from .handoff_protocol import configuration
+                from .archive_handoff import ArchiveHandoff
+                cfg = configuration(os.environ['MULI_ARCHIVE_HANDOFF_CONFIG'])
+                jobs.handoff = ArchiveHandoff(jobs,cfg['outbox'],cfg['acknowledgements'],cfg['since'],
+                    completion_facts=cfg.get('completion_facts', False), idle=lambda: not jobs.worker_busy.is_set() and server.page_cache.status().get('status')=='ready')
+                jobs.handoff.start()
+            except (OSError,ValueError,KeyError,TypeError) as exc:
+                jobs.handoff_configuration_error = type(exc).__name__
+                print(json.dumps({'service':'archive-handoff','status':'configuration_needs_review'}),flush=True)
+        jobs.start()
+        server.page_cache.warm(lambda: not any(job.get("status") in ("queued", "running") for job in jobs.list_jobs(summary=True)))
+        print(json.dumps({'service':'muli-sorter-console','url':server.public_origin,'example_data':not jobs.production,
+                          'submission_enabled':jobs.enabled}),flush=True)
+        if startup_server is None:
+            server.serve_forever(poll_interval=0.25)
+        else:
+            startup_server.activate()
+            startup_server.wait()
     finally:
+        if startup_server is not None:
+            startup_server.stop_serving()
         if jobs.handoff:
             jobs.handoff.close()
-        server.server_close()
-        photos.close()
+        if server is not None:
+            server.server_close()
+        if photos is not None:
+            photos.close()
         jobs.close()
 
 

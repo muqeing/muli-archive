@@ -1,3 +1,12 @@
+## 0.19.1 — 2026-10-19
+
+- Serve a truthful startup page before index initialization; return initializing/503 and reject work until the original checks and workers are ready. Reuse the same listener, close it on initialization failure, and keep offline catalog migration offline.
+- Scan historical item payloads in physical table order while retaining full row and derived-index validation. Reduce internal order-model duplication while keeping public copies detached.
+- Bound compressed opened-page retention by both four entries and 32MiB; restore evicted scopes only from an exact validated immutable snapshot. Add payload-free stage latency/RSS diagnostics.
+- Preserve all source/target/content checks and media execution paths. The original process-exit trigger still requires administrator evidence; no automatic task replay or cleanup is introduced.
+
+- NAS archive-only acceptance passed 943 local and 582 isolated checks without skips, exact 114-file installation, desktop/mobile GET and preserved business controls/other five instances. A single warm-disk run reached index readiness in ~9s and full-page readiness in ~86s; no sustained-performance or original-exit-cause claim.
+
 ## 配套拷贝服务0.2.1 — 2026-10-18
 
 Ingest新增可选短批公平调度，最多两个工作上下文共用一个读取轮次，保留原内容证明与最终回执条件。仅拷贝服务镜像更新；本归档/分类服务与CLI仍为0.19.0，实例不变。默认和新调度各128项隔离检查、正式公共健康及电脑/手机GET通过；真实媒体吞吐未测。详见Ingest仓库0.2.1说明。

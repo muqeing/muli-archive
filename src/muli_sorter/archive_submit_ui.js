@@ -75,6 +75,7 @@
   var refreshFeedbackTimer = null;
   var refreshRequest = 0;
   var locatedJobId = null;
+  var currentRunJobId = null;
 
   function make(tag, className, text) {
     var node = document.createElement(tag);
@@ -503,6 +504,7 @@
     });
   }
   function renderJob(job) {
+    if (job && !terminal(job.status)) currentRunJobId = job.job_id;
     var existing = jobs.filter(function (item) { return item && item.job_id === job.job_id; })[0];
     if (existing) Object.keys(job).forEach(function (key) { existing[key] = job[key]; });
     else jobs.unshift(job);
@@ -512,11 +514,15 @@
   function renderJobs() {
     var node = byId("archive-submit-jobs");
     if (!node) return;
+    var oldHistory = byId("archive-job-history"), historyOpen = !!(oldHistory && oldHistory.open);
     clear(node);
     if (!jobs.length) { node.appendChild(make("p", "muted", "暂无归档任务。")); return; }
     var requested = requestedJobId();
     var requestedNode = null;
-    jobs.forEach(function (job) {
+    var historical = jobs.filter(function (job) { return terminal(job.status) && job.job_id !== requested && job.job_id !== currentRunJobId; });
+    var active = jobs.filter(function (job) { return historical.indexOf(job) < 0; });
+    if (!active.length) node.appendChild(make("p", "muted", "当前没有运行中的归档任务。"));
+    function appendJob(job, targetNode) {
       var item = make("div", "archive-submit-job");
       item.style.minWidth = "0";
       item.style.maxWidth = "100%";
@@ -571,8 +577,19 @@
         body.insertBefore(make("span", "muted", "当前 URL 指向的任务"), body.firstChild);
         requestedNode = item;
       }
-      node.appendChild(item);
-    });
+      targetNode.appendChild(item);
+    }
+    active.forEach(function (job) { appendJob(job, node); });
+    if (historical.length) {
+      var history = make("details"); history.id = "archive-job-history"; history.open = historyOpen;
+      history.appendChild(make("summary", "muted", "查看已结束的归档任务（" + historical.length + " 项）"));
+      var historyBody = make("div"); history.appendChild(historyBody);
+      function renderHistorical() {
+        clear(historyBody);
+        if (history.open) historical.forEach(function (job) { appendJob(job, historyBody); });
+      }
+      history.addEventListener("toggle", renderHistorical); node.appendChild(history); renderHistorical();
+    }
     if (requestedNode && locatedJobId !== requested) {
       locatedJobId = requested;
       if (typeof requestedNode.focus === "function") requestedNode.focus({ preventScroll: false });

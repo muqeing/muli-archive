@@ -52,6 +52,9 @@ def snapshot(model, archive, materials, discovery, ingest_url):
         else:
             row['phase'] = {'waiting_completion': 'copying', 'verification_required': 'verifying',
                             'queued': 'organizing', 'processing': 'organizing', 'retry_wait': 'needs_attention'}.get(incoming['state'], 'unknown')
+        if incoming.get('history_only') is True and not row['pending'] and not row['exceptions']:
+            row['history_only'] = True
+            row['history_kind'] = incoming.get('history_kind')
     if discovery is not None and discovery.get('source_ok') is not True:
         for row in batches.values():
             row['phase'] = 'unknown'

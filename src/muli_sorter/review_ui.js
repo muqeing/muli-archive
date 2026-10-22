@@ -252,6 +252,28 @@
       in_current_model: entry.in_current_model === true
     };
   }
+  function accountingSafe(value, data) {
+    if (!value || value.version !== "archive-accounting/1" || value.report_id !== model.report_id ||
+        !Number.isSafeInteger(value.total_units) || value.total_units !== units.length ||
+        !Number.isSafeInteger(value.total_files) || value.total_files < value.total_units ||
+        !value.buckets || typeof value.buckets !== "object") return null;
+    var keys = ["archived", "retained", "pending", "review", "system", "discarded"], totalUnits = 0, totalFiles = 0, buckets = {};
+    for (var i = 0; i < keys.length; i++) {
+      var row = value.buckets[keys[i]];
+      if (!row || !Number.isSafeInteger(row.units) || row.units < 0 || !Number.isSafeInteger(row.files) || row.files < row.units ||
+          (!row.units && row.files)) return null;
+      totalUnits += row.units; totalFiles += row.files;
+      buckets[keys[i]] = {units: row.units, files: row.files};
+    }
+    if (totalUnits !== value.total_units || totalFiles !== value.total_files ||
+        buckets.archived.units !== data.archived_unit_ids.length || buckets.archived.files !== data.current_files ||
+        buckets.retained.units !== (data.retained_unit_ids || []).length || buckets.retained.files !== (data.retained_current_files || 0)) return null;
+    var formats = value.archived_file_formats, formatKeys = ["primary", "companion", "system", "other"];
+    if (!formats || formatKeys.some(function (key) { return !Number.isSafeInteger(formats[key]) || formats[key] < 0; }) ||
+        formatKeys.reduce(function (n, key) { return n + formats[key]; }, 0) !== buckets.archived.files) return null;
+    return {total_units: value.total_units, total_files: value.total_files, buckets: buckets,
+      archived_file_formats: {primary: formats.primary, companion: formats.companion, system: formats.system, other: formats.other}};
+  }
   function archiveDataSafe(data) {
     if (!data || typeof data !== "object" || Array.isArray(data)) return null;
     var retainedIds = data.retained_unit_ids === undefined ? [] : data.retained_unit_ids;
@@ -295,6 +317,7 @@
     return { report_id: expected, archived_units: entries, warnings: warnings, byUnit: byUnit,
       paged: data.version === "archive-summary/1", current_files:data.current_files,
       history_total:data.history_total, history_generation:data.history_generation,
+      accounting:data.version === "archive-summary/1" ? accountingSafe(data.accounting, data) : null,
       retained_unit_ids: retainedIds.slice(), retained_current_files: retainedCurrentFiles,
       retained_jobs: normalizedRetainedJobs, retainedByUnit: retainedByUnit };
   }
@@ -1828,8 +1851,28 @@
       clear(summary);
       var totalFiles = state.archiveState.paged ? state.archiveState.current_files : state.archiveState.archived_units.filter(function (entry) { return entry.in_current_model; }).reduce(function (sum, entry) { return sum + (Number(entry.file_count) || entry.files.length); }, 0);
       summary.appendChild(make("span", "", "当前报告已归档 " + archived + " 个素材 / " + totalFiles + " 个文件"));
-      if (retainedUnitCount()) summary.appendChild(make("span", "warning", "已复制，来源保留（未完整校验） " + retainedUnitCount() + " 个素材 / " + Number(state.archiveState.retained_current_files || 0) + " 个文件"));
-      summary.appendChild(make("span", "", pendingUnits ? "待处理 " + pendingUnits + " 个素材" : (archived >= units.length ? "已完成：没有待处理素材。" : "当前没有待处理段；已确认或暂缓素材仍保留。")));
+      var ledger = state.archiveState.accounting;
+      if (ledger) {
+        var table = make("table", "archive-accounting"), head = make("tr");
+        ["当前清单去向", "素材", "文件"].forEach(function (label) { head.appendChild(make("th", "", label)); });
+        var thead = make("thead"); thead.appendChild(head); table.appendChild(thead);
+        var body = make("tbody");
+        [["archived", "已归档"], ["pending", "待归档"], ["review", "待核对"], ["retained", "旧任务来源保留 · 未完整核验"],
+         ["system", "系统辅助 · 无需项目归档"], ["discarded", "已弃用 · 单独保留"]].forEach(function (item) {
+          var row = make("tr"), count = ledger.buckets[item[0]];
+          row.appendChild(make("td", "", item[1])); row.appendChild(make("td", "", String(count.units))); row.appendChild(make("td", "", String(count.files))); body.appendChild(row);
+        });
+        var totalRow = make("tr"); ["合计", ledger.total_units, ledger.total_files].forEach(function (value) { totalRow.appendChild(make("th", "", String(value))); }); body.appendChild(totalRow);
+        table.appendChild(body); var tableWrap = make("div", "archive-accounting-wrap"); tableWrap.appendChild(table); summary.appendChild(tableWrap);
+        var formats = ledger.archived_file_formats;
+        summary.appendChild(make("p", "muted archive-accounting-note", "已归档文件按格式：拍摄主文件 " + formats.primary + " · 拍摄附属文件 " + formats.companion + " · 系统辅助 " + formats.system + " · 其他 " + formats.other + "。附属文件已包含在已归档文件数内。"));
+        summary.appendChild(make("p", "muted archive-accounting-note", "以上各项互不重复，合计等于当前清单。一个素材可包含多个文件；主文件与拍摄附属文件均逐个计数。系统辅助、已弃用和未完整核验文件不计作已归档。不明文件仍需核对。"));
+      } else {
+        summary.appendChild(make("span", "muted", "完整文件去向统计需重新加载页面；请先保存草稿。当前未将差额视为已归档。"));
+      }
+      summary.appendChild(make("span", "", pendingUnits ? "待处理 " + pendingUnits + " 个素材" :
+        (ledger && (ledger.buckets.review.files || ledger.buckets.retained.files) ? "当前没有待处理拍摄段；仍有待核对或未完整核验文件，见上表。" :
+         (ledger && !ledger.buckets.pending.files ? "当前没有待归档拍摄段。" : "当前没有待处理段；请核对文件去向。"))));
       if (state.archiveState.warnings.length) summary.appendChild(make("span", "warning", state.archiveState.warnings.join("；")));
     }
   }
@@ -1893,9 +1936,9 @@
     var entries = archiveHistoryEntries();
     if (!panel || !details || !list || !more || !summary) return;
     var total = state.archiveState.paged ? state.archiveState.history_total : entries.length;
-    panel.hidden = !total && !state.archiveState.warnings.length && !retainedUnitCount();
+    panel.hidden = !units.length && !total && !state.archiveState.warnings.length && !retainedUnitCount();
     renderRetainedPanel();
-    summary.textContent = "已归档历史（" + total + " 条）";
+    summary.textContent = "全部历史素材记录（" + total + " 条，跨清单）";
     if (!details.open) {
       clear(list);
       more.hidden = true;
@@ -1930,14 +1973,12 @@
     var previous = byId("archive-retained-panel");
     if (previous && previous.parentNode) previous.parentNode.removeChild(previous);
     if (!retainedUnitCount()) return;
-    var box = make("div", "archive-retained-panel notice");
+    var box = make("details", "archive-retained-panel notice");
+    box.open = !!(previous && previous.open);
     box.id = "archive-retained-panel";
-    box.style.display = "flex";
-    box.style.flexDirection = "column";
-    box.style.gap = ".35rem";
-    box.appendChild(make("strong", "", "历史记录 · 已复制，来源保留（未完整校验）"));
+    box.appendChild(make("summary", "", "历史来源保留记录（" + (state.archiveState.retained_jobs || []).length + " 项）"));
     box.appendChild(make("span", "muted", retainedUnitCount() + " 个素材 · " + Number(state.archiveState.retained_current_files || 0) + " 个文件"));
-    box.appendChild(make("p", "muted", "这是历史记录，不需要处理，也不影响当前待处理的素材。这些素材仅确认已复制、内容尚未完整校验；来源文件仍保留，它们不会再次加入新归档任务；可在下方查看原任务记录。"));
+    box.appendChild(make("p", "muted", "这些旧任务仅确认已复制，尚未完成全部内容校验；来源保留，不计入已核验完成数。记录退出当前操作区，但原任务、回执和保护条件全部保留，不会自动重试或清理来源。"));
     (state.archiveState.retained_jobs || []).slice(0, 20).forEach(function (job) {
       var projects = job.project_names && job.project_names.length ? " · 项目：" + job.project_names.join("、") : "";
       var row = make("span", "muted", "任务 " + String(job.job_id).slice(0, 12) + "… · " + job.unit_count + " 个素材 · " + job.file_count + " 个文件" + projects);
@@ -1965,6 +2006,7 @@
       setStatus("归档状态格式无效，未应用。", "error");
       return false;
     }
+    if (state.accountingInvalidated) normalized.accounting = null;
     if (units.some(function (unit) { return unit._identityOnly && !normalized.byUnit[unit.unit_id] && !normalized.retainedByUnit[unit.unit_id] && materialRole(unit.unit_id) !== "discarded"; })) {
       setStatus("部分素材需要重新读取详情；请保存草稿后刷新页面。", "error");
       return false;
@@ -2032,6 +2074,10 @@
       });
     });
     var previousMaterials = materialByUnit;
+    // A refreshed material overlay can change the partition. Never keep an
+    // old server ledger beside new source results or infer counts from stubs.
+    state.archiveState.accounting = null;
+    state.accountingInvalidated = true;
     materialState = normalized;
     settings.material_state = data;
     materialByUnit = normalized.units;
@@ -2136,7 +2182,7 @@
     var exceptions = scoped.filter(function (unit) { return materialRole(unit.unit_id) === "exception"; }).length;
     var support = scoped.filter(function (unit) { return materialRole(unit.unit_id) === "support"; }).length;
     var incoming = (Array.isArray(discoveryState.batches) ? discoveryState.batches : []).filter(function (row) {
-      return !state.batch || row.batch_id === state.batch;
+      return row.history_only !== true && (!state.batch || row.batch_id === state.batch);
     });
     var processing = incoming.filter(function (row) { return row.state === "processing"; }).length;
     var queued = incoming.filter(function (row) { return row.state === "queued"; }).length;
@@ -2159,7 +2205,7 @@
     }
     if (exceptions || support) return "本页当前筛选没有待确认的拍摄段。" + details;
     if (state.date || state.batch) return "当前日期或批次没有可显示的拍摄段，请调整日期或批次筛选。这不代表其他批次已经完成。";
-    if (retainedUnitCount()) return "本页没有待确认的拍摄段；已复制但未完整校验的素材仍保留来源，请查看归档状态。";
+    if (retainedUnitCount()) return "当前没有待确认拍摄段。旧任务的来源保留情况可在归档历史中查看。";
     var retired = discoveryState.lifecycle || {};
     if (!units.length && (retired.closed || retired.cancelled || retired.needs_attention)) {
       return "当前没有待确认拍摄段。" + (retired.closed ? retired.closed + " 个批次已结案，详情按需查看历史。" : "")
@@ -2227,34 +2273,47 @@
     snapshotNode.textContent = readableDateTime(model.snapshot_at);
     snapshotNode.title = String(model.snapshot_at || "未提供");
     if (model.example_data === true) byId("example-banner").hidden = false;
+    renderExcludedBatches();
+  }
+  function renderExcludedBatches() {
     var excluded = Array.isArray(model.excluded_batches) ? model.excluded_batches : [];
-    if (excluded.length) {
-      var box = byId("excluded-box"), list = byId("excluded-batches");
-      var historical = [], actionable = [];
-      excluded.forEach(function (batch) {
-        var reasons = Array.isArray(batch.reasons) ? batch.reasons.filter(function (text) { return typeof text === "string" && text; }).join("；") : "";
-        var superseded = String(batch.status || "") === "superseded" || reasons.indexOf("当前完整列表已无此版本") >= 0;
-        (superseded ? historical : actionable).push({ batch: batch, reasons: reasons });
-      });
-      var line = function (row) {
-        return String(row.batch.batch_id || "未命名批次") + " · " + batchStatusText(row.batch.status)
-          + (row.reasons ? " · " + row.reasons : "");
-      };
-      list.appendChild(make("li", "muted", actionable.length
-        ? "已排除 " + excluded.length + " 个批次，其中 " + actionable.length + " 个需要注意，"
-          + historical.length + " 个已被更新版本取代（历史记录，不影响当前待处理素材）。"
-        : "已排除 " + excluded.length + " 个批次，全部已被更新版本取代；这里是历史记录，不影响当前待处理素材。"));
-      actionable.forEach(function (row) { list.appendChild(make("li", "", line(row))); });
-      if (historical.length) {
-        var details = document.createElement("details");
-        details.appendChild(make("summary", "muted", "展开查看已被取代的历史批次 " + historical.length + " 个"));
-        var inner = document.createElement("ul");
-        historical.forEach(function (row) { inner.appendChild(make("li", "muted", line(row))); });
-        details.appendChild(inner);
-        box.appendChild(details);
-      }
-      box.hidden = false;
+    var box = byId("excluded-box"), list = byId("excluded-batches");
+    if (!box || !list) return;
+    var previous = byId("excluded-history"), wasOpen = !!(previous && previous.open);
+    if (previous) previous.remove();
+    clear(list);
+    if (!excluded.length) { box.hidden = true; return; }
+    var incoming = Object.create(null);
+    (discoveryState.batches || []).forEach(function (row) { incoming[row.batch_id] = row; });
+    var historical = [], actionable = [];
+    excluded.forEach(function (batch) {
+      var reasons = Array.isArray(batch.reasons) ? batch.reasons.filter(function (text) { return typeof text === "string" && text; }).join("；") : "";
+      var source = incoming[batch.batch_id] || {};
+      var superseded = String(batch.status || "") === "superseded" || reasons.indexOf("当前完整列表已无此版本") >= 0;
+      var history = superseded || source.history_only === true;
+      var label = source.history_kind === "manual_archived" ? "已核验手工归档，无需重复归档"
+        : source.history_kind === "copy_failed" ? "历史拷贝失败，未自动重试"
+        : source.history_kind === "copy_interrupted" ? "历史拷贝已中断，未自动重试"
+        : superseded ? "已被更新版本取代" : batchStatusText(batch.status);
+      (history ? historical : actionable).push({batch:batch, reasons:reasons, label:label,
+        manual:source.history_kind === "manual_archived"});
+    });
+    function line(row) {
+      return String(row.batch.batch_id || "未命名批次") + " · " + row.label
+        + (row.reasons && !row.manual ? " · " + row.reasons : "");
     }
+    var title = box.querySelector("h2");
+    if (title) title.textContent = actionable.length ? "待核对批次" : "历史批次记录";
+    actionable.forEach(function (row) { list.appendChild(make("li", "", line(row))); });
+    if (historical.length) {
+      var details = make("details"); details.id = "excluded-history"; details.open = wasOpen;
+      details.appendChild(make("summary", "muted", "查看历史批次记录（" + historical.length + " 项）"));
+      details.appendChild(make("p", "muted", "已结束或已被取代的记录不作为当前拷贝进度。原失败和未核验状态保留；不会自动重试、移动或删除素材。"));
+      var inner = make("ul");
+      historical.forEach(function (row) { inner.appendChild(make("li", "muted", line(row))); });
+      details.appendChild(inner); box.appendChild(details);
+    }
+    box.hidden = false;
   }
   window.muliReview = {
     setBatchFilter: function (batch) {
@@ -2291,6 +2350,7 @@
     var data = event.detail;
     if (!data || data.schema !== "discovery-status/1" || !Array.isArray(data.batches)) return;
     discoveryState = data;
+    renderExcludedBatches();
     if (!discoveryBaseline) discoveryBaseline = data.base_report_id || "";
     // Refresh only the empty-state wording. Polling never rewrites the plan,
     // closes cards, prunes selections, or reloads somebody's open draft.

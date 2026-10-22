@@ -125,6 +125,11 @@ h3 { font-size: 1rem; margin: 0; }
 .archive-submit-option input { margin-right: .35rem; }
 .archive-submit-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .65rem; }
 .archive-state-summary { display: flex; flex-wrap: wrap; gap: .45rem 1rem; margin: .55rem 0 0; color: #4f5a66; font-size: .87rem; }
+.archive-accounting-wrap { flex-basis: 100%; min-width: 0; }
+.archive-accounting { width: 100%; max-width: 42rem; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.archive-accounting th, .archive-accounting td { padding: .45rem .5rem; border-bottom: 1px solid #e1e6eb; text-align: right; }
+.archive-accounting th:first-child, .archive-accounting td:first-child { text-align: left; }
+.archive-accounting-note { flex-basis: 100%; margin: .2rem 0; }
 .archive-history { margin-top: .7rem; }
 .archive-history-list { display: grid; gap: .45rem; margin-top: .55rem; }
 .archive-history-item { border: 1px solid #dfe3e8; border-radius: 8px; padding: .55rem .65rem; overflow-wrap: anywhere; }

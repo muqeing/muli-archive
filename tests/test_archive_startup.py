@@ -35,7 +35,10 @@ class StartupTests(unittest.TestCase):
             def do_GET(self):
                 self.send_response(200);self.end_headers();self.wfile.write(b'actual')
             def do_POST(self):
-                writes.append(1);self.send_response(202);self.end_headers()
+                # Consume the synthetic body before closing; an unread body
+                # can reset the TCP connection on macOS and mask the assertion.
+                self.rfile.read(int(self.headers.get('Content-Length', '0')))
+                writes.append(1);self.send_response(202);self.send_header('Content-Length','0');self.end_headers()
         with StartupServer(('127.0.0.1',0)) as server:
             origin=f'http://127.0.0.1:{server.server_port}'
             code,body,_=call(origin);self.assertEqual(code,200)

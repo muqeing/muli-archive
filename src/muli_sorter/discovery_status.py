@@ -32,6 +32,17 @@ def snapshot(queue):
                 pass
             except (OSError, ValueError):
                 item['verification'] = {'state': 'unavailable'}
+        # Presentation only. Keep original states and errors for inspection;
+        # none of these flags grants completion, retry or cleanup permission.
+        verification_state = item.get('verification', {}).get('state')
+        history_kind = None
+        if verification_state == 'manual_archive_verified':
+            history_kind = 'manual_archived'
+        elif row['state'] == 'waiting_completion' and not verification_state:
+            history_kind = {'拷贝失败': 'copy_failed', '拷贝已中断': 'copy_interrupted'}.get(item['reason'])
+        if history_kind:
+            item['history_only'] = True
+            item['history_kind'] = history_kind
         rows.append(item)
     lifecycle=state.get('lifecycle',{})
     counts=lifecycle.get('counts',{}) if lifecycle.get('enabled') is True else {}

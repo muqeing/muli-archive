@@ -299,6 +299,35 @@ class HTTPTests(Fixture, unittest.TestCase):
         with urlopen(request,timeout=10) as response:
             return response.status,response.read()
 
+    def accounting_page(self):
+        import time
+        for _ in range(200):
+            status, raw = self.call('/api/review-page')
+            if status == 200:
+                _, summary = self.call('/api/archive-state?view=compact&report_id='+self.model['report_id'])
+                return raw, json.loads(summary)
+            self.assertEqual(status, 202)
+            time.sleep(.01)
+        self.fail('synthetic accounting page did not become ready')
+
+    def test_cached_file_accounting_counts_bundled_files_without_business_writes(self):
+        before = sorted(p.name for p in (self.service.state/'units').iterdir())
+        _, summary = self.accounting_page()
+        ledger = summary['accounting']
+        self.assertEqual(ledger['total_files'], 5)
+        self.assertEqual(ledger['buckets']['archived']['files'], 0)
+        self.assertEqual(sum(r['files'] for r in ledger['buckets'].values()), 5)
+        self.assertEqual(self.service.list_jobs(), [])
+        self.assertEqual(before, sorted(p.name for p in (self.service.state/'units').iterdir()))
+
+    def test_accounting_inconsistency_does_not_take_down_console_or_claim_success(self):
+        with patch('muli_sorter.archive_console.archive_accounting', side_effect=ValueError('synthetic mismatch')):
+            html, summary = self.accounting_page()
+        self.assertEqual(summary['accounting']['version'], 'archive-accounting/unavailable')
+        self.assertEqual(summary['archived_unit_ids'], [])
+        self.assertIn(b'archive-state-summary', html)
+        self.assertEqual(self.service.list_jobs(), [])
+
     def test_http_one_click_contract_and_reload_status(self):
         status,body=self.call('/')
         self.assertEqual(status,200)

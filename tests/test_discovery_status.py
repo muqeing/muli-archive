@@ -34,3 +34,38 @@ class DiscoveryStatusTests(unittest.TestCase):
 
 
 if __name__=='__main__':unittest.main()
+
+class HistoricalDisplayTests(unittest.TestCase):
+    def project(self, rows, verification=None):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);bid='BATCH_20261001_000014'
+            (root/'队列状态.json').write_text(json.dumps({'source':{'ok':True},'jobs':[
+                {'batch_id':bid,**row} for row in rows]}))
+            if verification:
+                (root/(bid+'.status.json')).write_text(json.dumps({'schema':'postcopy-status/1','batch_id':bid,**verification}))
+            with patch.dict(os.environ,{'MULI_POSTCOPY_RECEIPTS':str(root)}):
+                return snapshot(root)['batches']
+
+    def test_terminal_copy_is_history_without_rewriting_failure_or_completion(self):
+        for reason,kind in [('拷贝失败','copy_failed'),('拷贝已中断','copy_interrupted')]:
+            row=self.project([{'state':'waiting_completion','error':reason}])[0]
+            self.assertEqual((row['state'],row['reason']),('waiting_completion',reason))
+            self.assertTrue(row['history_only']);self.assertEqual(row['history_kind'],kind)
+            self.assertNotIn('verification',row)
+
+    def test_active_or_unknown_errors_never_silently_become_history(self):
+        for state,reason in [('processing','拷贝失败'),('retry_wait','整理失败'),
+                             ('waiting_completion','等待拷贝程序确认完成'),
+                             ('verification_required','缺少内容证据')]:
+            row=self.project([{'state':state,'error':reason}])[0]
+            self.assertNotIn('history_only',row)
+        row=self.project([{'state':'verification_required'}],{'state':'failed','error':'hash mismatch'})[0]
+        self.assertNotIn('history_only',row)
+        self.assertEqual(row['verification']['error'],'hash mismatch')
+
+    def test_manual_archive_is_display_history_with_original_gate_preserved(self):
+        row=self.project([{'state':'verification_required','error':'仍缺独立证明'}],
+                         {'state':'manual_archive_verified','verified_files':7})[0]
+        self.assertEqual(row['history_kind'],'manual_archived')
+        self.assertEqual(row['state'],'verification_required')
+        self.assertEqual(row['reason'],'仍缺独立证明')

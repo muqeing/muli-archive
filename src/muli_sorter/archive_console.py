@@ -40,7 +40,7 @@ from .page_loading import LOADING_PAGE, loading_page
 from .review_page_cache import ReviewPageCache
 from .review_display_store import DisplayStore
 from .review_control_watch import ControlWatch
-from .review_projection import compact_archive, pending_view, history_page, page_signature
+from .review_projection import archive_accounting, compact_archive, pending_view, history_page, page_signature
 from .discovery_status import snapshot as discovery_snapshot
 
 from .workflow_status import service_origin, snapshot as workflow_snapshot
@@ -135,7 +135,7 @@ def make_server(jobs, queue, *, host='127.0.0.1', port=0, public_origin=None, al
     restore_once = True
     renderer = renderer_fingerprint(Path(__file__).parent)
     def display_key():
-        return ('pending-display/6-source-preparation', jobs.identity, jobs.enabled, jobs.move_enabled,
+        return ('pending-display/7-file-accounting', jobs.identity, jobs.enabled, jobs.move_enabled,
                 jobs.label, ingest_url, page_signature(queue, jobs.state), renderer)
     def build_page(phase):
         nonlocal restore_once
@@ -184,7 +184,14 @@ def make_server(jobs, queue, *, host='127.0.0.1', port=0, public_origin=None, al
         # consumes the current pending view, never historical archived media.
         pending_ids = {u['unit_id'] for u in view['units']}
         jobs.source_preparation.schedule([u for u in model['units'] if u['unit_id'] in pending_ids], scope_key=key)
-        summary = compact_archive(archive, {u['unit_id'] for u in model['units'] if u.get('kind') == 'video'})
+        # Accounting is a display aid. An inconsistency must remain visible,
+        # never take down the console or manufacture an archive completion.
+        try:
+            accounting = archive_accounting(model, archive, materials)
+        except ValueError:
+            accounting = {'version': 'archive-accounting/unavailable', 'report_id': model['report_id']}
+        summary = compact_archive(archive, {u['unit_id'] for u in model['units'] if u.get('kind') == 'video'},
+                                  accounting=accounting)
         discovery = discovery_snapshot(queue) if (queue/'队列状态.json').exists() else None
         workflow = workflow_snapshot(model, archive, materials, discovery, ingest_url) if ingest_url else None
         descriptor = photo_index.build(view) if photo_index is not None else None

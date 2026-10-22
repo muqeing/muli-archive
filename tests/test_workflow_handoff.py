@@ -55,3 +55,16 @@ class WorkflowNavigationTests(Fixture,unittest.TestCase):
             self.assertEqual(self.service.list_jobs(),[])
         finally:
             server.shutdown();server.server_close();thread.join(2)
+
+class HistoricalWorkflowTests(unittest.TestCase):
+    def test_history_marker_never_hides_actual_pending_units(self):
+        incoming={'batch_id':BID,'state':'waiting_completion','reason':'拷贝失败',
+                  'history_only':True,'history_kind':'copy_failed'}
+        discovery={'source_ok':True,'batches':[incoming]}
+        empty=snapshot({'units':[]},{},{},discovery,'http://localhost:18765')['batches'][0]
+        self.assertTrue(empty['history_only'])
+        model={'units':[{'unit_id':'u','file_count':1,'provenance':[{'batch_id':BID}]}]}
+        pending=snapshot(model,{}, {'units':{'u':{'category':'shoot'}}},discovery,
+                         'http://localhost:18765')['batches'][0]
+        self.assertNotIn('history_only',pending)
+        self.assertEqual(pending['pending'],1)

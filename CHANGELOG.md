@@ -1,3 +1,13 @@
+## 0.19.2 — 2026-10-22
+
+- Add a disjoint, current-report file ledger with separate unit/file totals and format-only primary/sidecar breakdown. Keep cross-report historical records separate; unknown roles remain review work and retained unverified copies never become archived.
+- Reuse already-loaded current data, invalidate stale ledgers after source refresh, and keep the console available when accounting cannot reconcile. No media scans, completion fact migrations or eligibility changes.
+- Separate terminal copy interruptions/failures and verified manual archive status from active discovery progress without rewriting original gates or states.
+- Collapse retained-source records and finished task cards by default; build historical cards only when expanded. Keep running/session/deep-linked tasks and current verification/unknown-source errors visible.
+- Reconcile exclusion labels from the lightweight discovery projection while preserving selections and recovery state. Preserve all media, receipts, audit records, preflight and submission checks.
+- Source and CLI share the version; local validation and production deployment are distinct stages.
+- NAS archive-only acceptance: 953 local and 593 isolated Linux checks without skips, exact 114-file installation, desktop/mobile GET accounting/history/refresh verification and unchanged other five instances/business controls. No production media operation or completion migration; prior exit trigger remains unknown.
+
 ## 0.19.1 — 2026-10-19
 
 - Serve a truthful startup page before index initialization; return initializing/503 and reject work until the original checks and workers are ready. Reuse the same listener, close it on initialization failure, and keep offline catalog migration offline.

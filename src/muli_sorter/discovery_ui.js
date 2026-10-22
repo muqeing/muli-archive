@@ -12,7 +12,8 @@
     changed = changed || !!(baseline && data.base_report_id && baseline !== data.base_report_id);
     window.dispatchEvent(new CustomEvent("muli-discovery-status", {detail: data}));
     list.replaceChildren();
-    data.batches.forEach(function (batch) {
+    var active = data.batches.filter(function (batch) { return batch.history_only !== true; });
+    active.forEach(function (batch) {
       var p = document.createElement('p'), v = batch.verification || {}, label;
       if (v.state === 'verifying') label = '正在内容校验 · ' + (v.verified_files || 0) + '/' + (v.total_files || 0) + ' 个文件 · 已读取 ' + ((v.read_bytes || 0)/1e9).toFixed(2) + ' GB';
       else if (v.state === 'manual_archive_verified') label = '已核验手工归档 · ' + (v.verified_files || 0) + ' 个原片 · ' + String(v.project || '已有订单') + '；无需重复归档';
@@ -24,7 +25,7 @@
       p.style.overflowWrap = 'anywhere'; list.appendChild(p);
     });
     message.textContent = data.source_ok === false ? '暂时无法读取备份状态；当前选择保持。' : changed ? '发现新的待归档素材。点击下方按钮保存草稿并查看。' : '';
-    reload.hidden = !changed; panel.hidden = !data.batches.length && !changed && data.source_ok !== false;
+    reload.hidden = !changed; panel.hidden = !active.length && !changed && data.source_ok !== false;
   }
   reload.addEventListener('click', function () {
     if (!window.muliReview || window.muliReview.saveDraft() !== true) { message.textContent = '草稿保存未通过，已保留当前页面。'; return; }
